@@ -244,9 +244,61 @@ def _validate_mahalanobis_kwargs(X, m, n, **kwargs):
         if isinstance(X, tuple):
             X = np.vstack(X)
         CV = np.atleast_2d(np.cov(X.astype(np.float64, copy=False).T))
-        VI = np.linalg.inv(CV).T.copy()
+        VI = np.linalg.inv(CV).T.copy()  # XXX: why .T?
     kwargs["VI"] = _convert_to_double(VI)
     return kwargs
+
+
+def _mahalanobis_cdist(XA, XB, *, out=None, w=None, VI=None):
+    XA = _validate_matrix(XA)
+    XB = _validate_matrix(XB)
+
+    # X = np.ascontiguousarray(XA)
+    # X = np.ascontiguousarray(XB)
+    p, n = XA.shape
+    q, _ = XB.shape
+    if n != XB.shape[1]:
+        raise ValueError
+    if VI is None:
+        raise NotImplementedError
+
+    # Validate VI
+
+
+
+    # XA, XB, typ, kwargs = _validate_cdist_input(
+    #    XA, XB, mA, mB, n, metric_info, **kwargs)
+
+    if w is not None:
+        raise NotImplementedError
+
+    if VI is None:
+        raise NotImplementedError
+
+    # For p, q much less than n, the straightforward method is more efficient.
+    if p*q*n < p+q+n:
+
+        dm = _prepare_out_argument(out, np.float64, (mA, mB))
+        # get cdist wrapper
+        cdist_fn = getattr(_distance_wrap,
+                           f'cdist_{metric_name}_{typ}_wrap')
+        cdist_fn(XA, XB, dm, **kwargs)
+        return dm
+
+    # In general, whiten the input matrices and then compute Euclidean distance.
+
+    VI = 0.5 * (VI + VI.T)  # ensure VI is symmetric
+    try:
+        # Try Cholesky decomposition, which works for positive-definite VI.
+        L = np.linalg.cholesky(VI)  # VI == L @ L.T
+    except np.linalg.LinAlgError:
+        # Cholesky fails, likely because VI not being positive-definite.
+        # Use SVD in this case to allow "opportunistic" distance calculation.
+        U, D, _ = np.linalg.svd(VI, hermitian=True)  # VI == U @ diag(D) @ U.T
+        return cdist(XA @ U, XB @ U, 'euclidean', w=D)
+    else:
+        # Cholesky decomposition successful.
+        return cdist(XA @ L, XB @ L, 'euclidean')
 
 
 def _validate_minkowski_kwargs(X, m, n, **kwargs):

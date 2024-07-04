@@ -773,3 +773,31 @@ struct YuleDistance {
         });
     }
 };
+
+// Straightforward implementation of Mahalanobis distance with known inverse
+// covariance matrix.  The time complexity is O(p*q*n^2), where p := number
+// of rows in X, q := number of rows in Y, and n := number of columns.
+template <typename T>
+struct MahalanobisDistance {
+    StridedView2D<T> vi; // n-by-n square (inverse covariance) matrix
+
+    void operator()(StridedView2D<T> out, StridedView2D<const T> x, StridedView2D<const T> y) const {
+        // precondition: out(m*1), x(m*n), y(m*n), vi(n*n)
+
+        const intptr_t m = x.shape[0];
+        const intptr_t n = x.shape[1];
+        for (intptr_t index = 0; index < m; ++index) {
+            T s = T(0);
+            for (intptr_t i = 0; i < n; ++i) {
+                for (intptr_t j = 0; j < n; ++j) {
+                    s += x(index, i) * vi(i, j) * y(index, j);
+                }
+            }
+            out(index, 0) = dist;
+        }
+    }
+
+    void operator()(StridedView2D<T> out, StridedView2D<const T> x, StridedView2D<const T> y, StridedView2D<const T> w) const {
+        throw std::invalid_argument("not implemented");
+    }
+};

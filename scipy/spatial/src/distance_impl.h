@@ -159,6 +159,7 @@ dot_product(const double *u, const double *v, const npy_intp n)
     return s;
 }
 
+#if 0
 static inline double
 mahalanobis_distance(const double *u, const double *v, const double *covinv,
                      double *dimbuf1, double *dimbuf2, const npy_intp n)
@@ -178,6 +179,7 @@ mahalanobis_distance(const double *u, const double *v, const double *covinv,
     }
     return sqrt(dot_product(dimbuf1, dimbuf2, n));
 }
+#endif
 
 static inline double
 hamming_distance_double(const double *u, const double *v, const npy_intp n, const double *w)
@@ -519,6 +521,7 @@ DEFINE_PDIST(sokalmichener, char)
 DEFINE_PDIST(sokalsneath, char)
 DEFINE_PDIST(yule, char)
 
+#if 0
 static inline int
 pdist_mahalanobis(const double *X, double *dm, const npy_intp num_rows,
                   const npy_intp num_cols, const double *covinv)
@@ -542,6 +545,7 @@ pdist_mahalanobis(const double *X, double *dm, const npy_intp num_rows,
     free(dimbuf1);
     return 0;
 }
+#endif
 
 static inline int
 pdist_weighted_chebyshev(const double *X, double *dm, npy_intp num_rows,
@@ -785,6 +789,7 @@ cdist_cosine(const double *XA, const double *XB, double *dm, const npy_intp num_
     return 0;
 }
 
+#if 0
 static inline int
 cdist_mahalanobis(const double *XA, const double *XB, double *dm,
                   const npy_intp num_rowsA, const npy_intp num_rowsB,
@@ -809,6 +814,7 @@ cdist_mahalanobis(const double *XA, const double *XB, double *dm,
     free(dimbuf1);
     return 0;
 }
+#endif
 
 static inline int
 cdist_seuclidean(const double *XA, const double *XB, const double *var,

@@ -189,6 +189,7 @@ static PyObject *cdist_cosine_double_wrap(PyObject *self, PyObject *args,
   return Py_BuildValue("d", 0.0);
 }
 
+#if 0
 static PyObject *cdist_mahalanobis_double_wrap(PyObject *self, PyObject *args, 
                                                PyObject *kwargs) {
   PyArrayObject *XA_, *XB_, *covinv_, *dm_;
@@ -222,6 +223,7 @@ static PyObject *cdist_mahalanobis_double_wrap(PyObject *self, PyObject *args,
   }
   return Py_BuildValue("d", 0.0);
 }
+#endif
 
 static PyObject *cdist_minkowski_double_wrap(PyObject *self, PyObject *args, 
                                              PyObject *kwargs) 
@@ -478,6 +480,7 @@ static PyObject *pdist_cosine_double_wrap(PyObject *self, PyObject *args,
   return Py_BuildValue("d", 0.0);
 }
 
+#if 0
 static PyObject *pdist_mahalanobis_double_wrap(PyObject *self, PyObject *args, 
                                                PyObject *kwargs) {
   PyArrayObject *X_, *covinv_, *dm_;
@@ -509,6 +512,7 @@ static PyObject *pdist_mahalanobis_double_wrap(PyObject *self, PyObject *args,
   }
   return Py_BuildValue("d", 0.0);
 }
+#endif
 
 static PyObject *pdist_minkowski_double_wrap(PyObject *self, PyObject *args, 
                                              PyObject *kwargs) 
@@ -718,9 +722,11 @@ static PyMethodDef _distanceWrapMethods[] = {
    {"cdist_kulczynski1_bool_wrap",
    cdist_kulczynski1_char_wrap,
    METH_VARARGS},
+#if 0
   {"cdist_mahalanobis_double_wrap",
    (PyCFunction) cdist_mahalanobis_double_wrap,
    METH_VARARGS | METH_KEYWORDS},
+#endif
   {"cdist_minkowski_double_wrap",
    (PyCFunction) cdist_minkowski_double_wrap,
    METH_VARARGS | METH_KEYWORDS},
@@ -790,9 +796,11 @@ static PyMethodDef _distanceWrapMethods[] = {
    {"pdist_kulczynski1_bool_wrap",
    pdist_kulczynski1_char_wrap,
    METH_VARARGS},
+#if 0
   {"pdist_mahalanobis_double_wrap",
    (PyCFunction) pdist_mahalanobis_double_wrap,
    METH_VARARGS | METH_KEYWORDS},
+#endif
   {"pdist_minkowski_double_wrap",
    (PyCFunction) pdist_minkowski_double_wrap,
    METH_VARARGS | METH_KEYWORDS},

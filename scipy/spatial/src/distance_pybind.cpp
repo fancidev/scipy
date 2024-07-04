@@ -1,5 +1,6 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/numpy.h>
+#include <pybind11/stl.h>
 #include <numpy/arrayobject.h>
 #include <cmath>
 #include <cassert>
@@ -546,6 +547,109 @@ py::array cdist(const py::object& out_obj, const py::object& x_obj,
     });
     return out;
 }
+
+//template <typename T, char op>
+//py::array _mahalanobis_disp(py::array_t<T> x, py::array_t<T> y,
+
+template <char op>
+py::array _mahalanobis_xdist(py::object out_obj, py::object x_obj,
+                             py::object y_obj, py::object w_obj,
+                             py::object vi_obj) {
+
+    py::array x = npy_asarray(x_obj);
+    if (x.ndim() != 2) {
+        throw std::invalid_argument("XA must be a 2-dimensional array.");
+    }
+
+    py::array y = npy_asarray(y_obj);
+    if (y.ndim() != 2) {
+        throw std::invalid_argument("XB must be a 2-dimensional array.");
+    }
+
+    if (x.shape(1) != y.shape(1)) {
+        throw std::invalid_argument(
+            "XA and XB must have the same number of columns "
+            "(i.e. feature dimension).");
+    }
+
+    const intptr_t num_rowsX = x.shape[0];
+    const intptr_t num_rowsY = y.shape[0];
+    std::array<intptr_t, 2> out_shape;
+    switch (op) {
+    case '*': // cdist
+        out_shape[0] = num_rowsX;
+        out_shape[1] = num_rowsY;
+        break;
+    case '<': // pdist
+        if (num_rowsX != num_rowsY) {
+            throw std::invalid_argument(
+                "XA and XB must have the same number of rows");
+        }
+        out_shape[0] = num_rowsX * (num_rowsX - 1) / 2;
+        out_shape[1] = 0;
+        break;
+    case '=':
+        if (num_rowsX != num_rowsY) {
+            throw std::invalid_argument(
+                "XA and XB must have the same number of rows");
+        }
+        out_shape[0] = num_rowsX;
+        out_shape[1] = 0;
+        break;
+    default:
+        static_assert(false, "invalid op");
+    }
+
+    py::dtype dtype = promote_type_real(common_type(x.dtype(), y.dtype()));
+    py::array out = prepare_out_argument(out_obj, dtype, out_shape);
+
+        DISPATCH_DTYPE(dtype, [&]{
+            cdist_unweighted<scalar_t>(out, x, y, f);
+        });
+        return out;
+    }
+
+    auto w = prepare_single_weight(w_obj, m);
+    auto dtype = promote_type_real(
+        common_type(x.dtype(), y.dtype(), w.dtype()));
+    auto out = prepare_out_argument(out_obj, dtype, out_shape);
+    DISPATCH_DTYPE(dtype, [&]{
+        cdist_weighted<scalar_t>(out, x, y, w, f);
+    });
+    return out;
+}
+
+#if 0
+// Converts 'obj' to a square 2-D array of unspecified dtype and flags.
+// Throws exception on error.
+py::array _prepare_square_matrix(const py::object& obj, const std::string& name) {
+    py::array a = npy_asarray(obj);
+    if (a.ndim() != 2) {
+        throw std::invalid_argument(name + " must be a 2-dimensional array.");
+    }
+    if (a.shape(0) != a.shape(1)) {
+        throw std::invalid_argument(name + " must be a square matrix.");
+    }
+
+    std::array<intptr_t, 2> out_shape{{x.shape(0), y.shape(0)}};
+    if (w_obj.is_none()) {
+        auto dtype = promote_type_real(common_type(x.dtype(), y.dtype()));
+        auto out = prepare_out_argument(out_obj, dtype, out_shape);
+        DISPATCH_DTYPE(dtype, [&]{
+            cdist_unweighted<scalar_t>(out, x, y, f);
+        });
+        return out;
+    }
+
+    auto w = prepare_single_weight(w_obj, m);
+    auto dtype = promote_type_real(
+        common_type(x.dtype(), y.dtype(), w.dtype()));
+    auto out = prepare_out_argument(out_obj, dtype, out_shape);
+    DISPATCH_DTYPE(dtype, [&]{
+        cdist_weighted<scalar_t>(out, x, y, w, f);
+    });
+    return out;
+#endif
 
 PYBIND11_MODULE(_distance_pybind, m) {
     if (_import_array() != 0) {
