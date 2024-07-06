@@ -1016,15 +1016,22 @@ def mahalanobis(u, v, VI):
     return result[0, 0]
 
 
-def _mahalanobis_xdist(op, XA, XB, *, out=None, VI=None):
-    x, y = _distance_pybind.prepare_input_for_real_metric(XA, XB, VI, op)
+def _mahalanobis_xdist(return_type, XA, XB, *, out=None, VI=None):
+
+    if VI is None:
+        w = None
+        x, y = _distance_pybind.prepare_input(XA, XB, return_type)
+    else:
+        w = np.asarray(VI)
+        x, y = _distance_pybind.prepare_input(XA, XB, return_type, w.dtype)
+
     p, n = x.shape
     q, _ = y.shape
 
-    if VI is None:
+    if w is None:
         # Inverse covariance matrix is not supplied.  Use the sample covariance
         # assuming the input as being independent observations.
-        sample = x if op == 'p' else np.vstack([x, y])
+        sample = x if return_type == 'p' else np.vstack([x, y])
         sample_size = sample.shape[0]
         if sample_size <= n:
             # There are fewer observations than the dimension of
@@ -1037,7 +1044,7 @@ def _mahalanobis_xdist(op, XA, XB, *, out=None, VI=None):
         sample_covar = np.atleast_2d(np.cov(sample, rowvar=False))
         w = np.linalg.inv(sample_covar)
     else:
-        w = _distance_pybind.prepare_weight_for_real_metric(x, y, VI, 2, 2)
+        w = _distance_pybind.prepare_weight_matrix(w, n, x.dtype)
 
     out = _distance_pybind.prepare_output_for_real_metric(x, y, w, op, out)
 
@@ -1054,11 +1061,11 @@ def _mahalanobis_xdist(op, XA, XB, *, out=None, VI=None):
         except np.linalg.LinAlgError:
             pass
         else:
-            return _distance_pybind.xdist_euclidean(x @ L, y @ L, out=out, op=op)
+            return _distance_pybind.xdist_euclidean(return_type, x @ L, y @ L, out=out)
 
     # Now there are only a small number of vectors to compute, or Cholesky
     # decomposition failed.  Fall back to direct calculation.
-    return _distance_pybind.xdist_mahalanobis(x, y, out=out, w=w, op=op)
+    return _distance_pybind.xdist_mahalanobis(return_type, x, y, out=out, w=w, op=op)
 
 
 def chebyshev(u, v, w=None):
