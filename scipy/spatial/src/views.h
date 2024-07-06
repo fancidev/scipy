@@ -23,4 +23,9 @@ struct StridedView2D {
     T& operator()(intptr_t i, intptr_t j) {
         return data[i * strides[0] + j * strides[1]];
     }
+
+    template <typename Other>
+    StridedView2D<Other> rebind() {
+        return StridedView2D<Other>{shape, strides, static_cast<Other*>(data)};
+    }
 };

@@ -1017,7 +1017,7 @@ def mahalanobis(u, v, VI):
 
 
 def _mahalanobis_xdist(op, XA, XB, *, out=None, VI=None):
-    x, y = _distance_pybind.prepare_float_input(XA, XB, None, op)
+    x, y = _distance_pybind.prepare_input_for_real_metric(XA, XB, VI, op)
     p, n = x.shape
     q, _ = y.shape
 
@@ -1037,9 +1037,9 @@ def _mahalanobis_xdist(op, XA, XB, *, out=None, VI=None):
         sample_covar = np.atleast_2d(np.cov(sample, rowvar=False))
         w = np.linalg.inv(sample_covar)
     else:
-        w = _distance_pybind.prepare_weight(VI, 2, x)
+        w = _distance_pybind.prepare_weight_for_real_metric(x, y, VI, 2, 2)
 
-    out = _distance_pybind.prepare_output(out, x, y, op)
+    out = _distance_pybind.prepare_output_for_real_metric(x, y, w, op, out)
 
     # Whiten the input observations using Cholesky decomposition, unless
     # there are only a small number of vectors to compute, in which case

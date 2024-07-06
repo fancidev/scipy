@@ -50,12 +50,12 @@
 // floating dtype is defined in the obvious manner.  The *native floating
 // type* of any other dtype is `double`.
 //
-// The storage type is what x, y, and w (if supplied) are promoted to before
-// doing the calculation.  [THIS PARAGRAPH IS TO BE COMPLETED.]
-//
 // The working type is the type in which computations are performed.  It is
 // equal to the return type, unless the return type is `float`, in which case
 // the working type is `double`.
+//
+// The storage type is what x, y, and w (if supplied) are promoted to before
+// doing the calculation.  [THIS PARAGRAPH IS TO BE COMPLETED.]
 //
 // The metrics are classified into three groups according to the domain of
 // the vectors for which they are defined.  The type promotion rules are
@@ -68,27 +68,33 @@
 //        sqeuclidean
 //
 //      For these metrics, the return type is the widest *native floating
-//      type* of x, y, and w (if supplied).
-//
+//      type* of x, y, and w (if supplied).  The storage type is equal to
+//      the return type.  Loss of precision is possible, for example by
+//      converting two large `int64` values that differ by one to `double`.
+
 //   2. Metrics defined for boolean vectors, including (7):
 //
 //        dice, kulczynski1, rogerstanimoto, russellrao, sokalmichener,
 //        sokalsneath, yule
 //
-//      For these metrics, the return type is the *native floating type*
-//      of w if it is supplied, or `double` otherwise.
+//      For these metrics, the return type is the *native floating type* of w
+//      if it is supplied, or `double` otherwise.  The storage type is `bool`.
 //
 //   3. Metrics defined for general vectors, including (2):
 //
 //        hamming, jaccard
 //
-//      For these metrics, the return type is the *native floating type*
-//      of w if it is supplied, or `double` otherwise.
+//      For these metrics, the return type is the *native floating type* of w
+//      if it is supplied, or `double` otherwise.  The storage type is the
+//      dtype of x and y unchanged, which must agree and which must be a POD
+//      type (i.e. not an object).  Floating and complex values are compared
+//      by value (IEEE-style); other POD types are compared by bit pattern.
+//      Note that the dtype of x and y does not affect the return type even
+//      if they are floating.
 //
 
 #include <pybind11/pybind11.h>
 #include <pybind11/numpy.h>
-#include <pybind11/stl.h>
 #include <numpy/arrayobject.h>
 #include <cmath>
 #include <cassert>
@@ -653,15 +659,15 @@ py::array cdist(const py::object& out_obj, const py::object& x_obj,
 // NEW STUFF
 ////////////////////////////////////////////////////
 
-// Get the floating storage type suitable for traversing an array with the
-// given dtype.
+// Get the *native floating type* for the given dtype.
 //
 // If dtype is already a floating type, return float, double, or long double,
-// whichever is closest.  Otherwise, return default_typenum.
+// whichever is closest.  Otherwise, return default_typenum. ????
 //
-// If the underlying array is not convertible to the returned dtype (e.g. if
-// it contains strings), the error will occur at the point of conversion.
-py::dtype get_floating_type(const py::dtype& dtype, int default_typenum) {
+// There is no guarantee that the underlying array is actually convertible
+// to the returned type.  An error will occur at the point of conversion if
+// this is not possible.
+py::dtype get_native_floating_type(const py::dtype& dtype, int default_typenum) {
     if (dtype.kind() == 'f') {
         auto size = dtype.itemsize();
         int typenum = (size <= 4) ? NPY_FLOAT :
@@ -671,14 +677,10 @@ py::dtype get_floating_type(const py::dtype& dtype, int default_typenum) {
         return py::dtype(default_typenum);
 }
 
-// Prepare and validate input x and y, which are to be treated as floating
-// type values.
+// Prepare input array x and y for use by a metric defined for real vectors.
 //
-// Return prepared (x, y) such that they have native floating point dtype
-// with at least as many bits as the original x, y, and w (if supplied).
-//
-// For efficiency, w_obj should be an np.array if not None.
-std::pair<py::array, py::array> prepare_floating_input(
+// For efficiency, w_obj should be an np.array if supplied.
+std::pair<py::array, py::array> prepare_input_for_real_metric(
     py::object x_obj, py::object y_obj, py::object w_obj, char extract) {
 
     // Detect identity to save redundant conversions.
@@ -708,15 +710,12 @@ std::pair<py::array, py::array> prepare_floating_input(
         }
     }
 
-    py::dtype dtype;
+    py::dtype dtype = common_type(get_native_floating_type(x.dtype()),
+                                  get_native_floating_type(y.dtype()));
     if (!w_obj.is_none()) {
-        // w is supplied; determine dtype from x and y, and default to double
-        dtype = get_floating_type(common_type(x.dtype(), y.dtype()), NPY_DOUBLE);
-    } else {
-        // w is supplied; determine dtype from x, y, and w
+        // w is supplied; also take into account its dtype
         py::array w = npy_asarray(w_obj);
-        py::dtype dtype = get_floating_type(
-            common_type(x.dtype(), y.dtype(), w.dtype()), NPY_DOUBLE);
+        dtype = common_type(dtype, get_floating_type(w.dtype()));
     }
 
     // Convert x and y to the desired dtype and layout.
@@ -725,11 +724,15 @@ std::pair<py::array, py::array> prepare_floating_input(
     return {x, y};
 )
 
-// Prepare and validate weight scalar, vector or matrix.
+// Prepare weight scalar, vector or matrix for use by a metric defined for
+// real vectors.
+//
 // x and y MUST already be prepared.  w must not be None.
+//
 // desired_ndim is the ndim of the weight to return; 0 for 0D array (scalar),
 // 1 for n-vector, 2 for n-by-n square matrix.
-// minimum_ndim is the smallest allowed ndim, that allows conversion according
+//
+// `minimum_ndim` is the smallest allowed ndim, that allows conversion according
 // to the following rules:
 //
 //   desired_ndim  ndim  conversion
@@ -738,8 +741,9 @@ std::pair<py::array, py::array> prepare_floating_input(
 //   2             0     diag([w,w,...,w])
 //   2             1     diag(w)
 //
-py::array prepare_weight(py::array x, py::array y, py::object w_obj,
-                         int desired_ndim, int minimum_ndim) {
+py::array prepare_weight_for_real_metric(
+    py::array x, py::array y, py::object w_obj, int desired_ndim, int minimum_ndim) {
+
     if (!(desired_ndim >= 0 && desired_ndim <= 2)) {
         throw std::invalid_argument("desired_ndim must be 0, 1 or 2");
     }
@@ -763,11 +767,13 @@ py::array prepare_weight(py::array x, py::array y, py::object w_obj,
 
     if (ndim == 1) {
         if (w.shape(0) != n) {
-            throw std::invalid_argument("weight has wrong shape");
+            throw std::invalid_argument("weight vector must have the same length "
+                                        "as the number of columns in X");
         }
     } else if (ndim == 2) {
         if (w.shape(0) != n || w.shape(1) != n) {
-            throw std::invalid_argument("weight has wrong shape");
+            throw std::invalid_argument("weight matrix must be square and have "
+                                        "the same number of columns as X");
         }
     }
 
@@ -775,51 +781,74 @@ py::array prepare_weight(py::array x, py::array y, py::object w_obj,
         throw std::runtime_error("not implemented");
     }
 
-    // Determine the required dtype, which *must* be a floating type, and
-    // which must at least have the same accuracy as itself.  Note that w
-    // will have a floating type even if x, y is non-floating, such as bool.
-    py::dtype xy_dtype = get_floating_type(common_type(x.dtype(), y.dtype()), NPY_FLOAT);
-    py::dtype dtype = get_floating_type(common_type(xy_dtype, w.dtype()), NPY_DOUBLE);
+    // Determine the weight dtype, which is the widest native floating type
+    // of x, y, and w.
+    py::dtype dtype = common_type(get_floating_type(x.dtype()),
+                                  get_floating_type(y.dtype()),
+                                  get_floating_type(w.dtype()));
     w = npy_asarray(w_obj, dtype, NPY_ARRAY_ALIGNED | NPY_ARRAY_NOTSWAPPED);
     return w;
 }
 
-py::array prepare_output(py::object out_obj, py::array x, py::array y, py::object w,)
+// x, y, and w (if supplied) *must* have already been prepared
+py::array prepare_output_for_real_metric(
+    py::object x_obj, py::object y_obj, py::object w_obj, char return_type, py::object out_obj)
 {
-    // Compute output shape.
-    auto [p, q, r, op, xy_dtype, w_dtype] = config_base{};
-    if (op == 'c') {
-        std::array<int, 2> out_shape {p, q};
-    } else if (op == 'p') {
-        std::array<int, 1> out_shape {p * (p - 1) / 2};
-    } else {
-        throw std::invalid_argument("invalid op");
+    py::array x = x_obj;
+    py::array y = y_obj;
+    py::array w = w_obj.is_none() ? py::object{} : w_obj;
+
+    if (!(x.ndim() == 2 && y.ndim() == 2)) {
+        throw std::invalid_argument("x and y must be 2-D arrays");
     }
 
+    // Compute output shape.
+    const intptr_t p = x.shape(0), q = y.shape(0), n = y.shape(1);
+    if (x.shape(1) != n) {
+        throw std::invalid_argument("x and y must have the same number of columns");
+    }
+    py::tuple out_shape;
+    if (return_type == RETURN_FULL) {
+        out_shape = py::make_tuple(p, q);
+    } else if (return_type == RETURN_UPPER) {
+        if (p != q) {
+            throw std::invalid_argument("x and y must have the same number of rows");
+        }
+        out_shape = py::make_tuple(p * (p - 1) / 2);
+    } else {
+        throw std::invalid_argument("invalid return_type");
+    }
+
+    // Compute output dtype.
+    py::dtype out_dtype = common_type(get_native_floating_type(x.dtype()),
+                                      get_native_floating_type(y.dtype()));
+    if (w) {
+        out_dtype = common_type(out_dtype, get_native_floating_type(w.dtype()));
+    }
+
+    // Create output buffer if none is supplied.
     if (out_obj.is_none()) {
         return py::array(dtype, out_shape);
     }
 
-    if (!py::isinstance<py::array>(obj)) {
+    // Now verify that the supplied `out` argument precisely satisfies our
+    // requirement.
+    if (!py::isinstance<py::array>(out_obj)) {
         throw py::type_error("out argument must be an ndarray");
     }
+    py::array out = out_obj;
 
-    py::array out = py::cast<py::array>(obj);
-    const auto ndim = out.ndim();
-    const auto shape = out.shape();
-    auto pao = reinterpret_cast<PyArrayObject*>(out.ptr());
-
-    if (ndim != static_cast<intptr_t>(out_shape.size()) ||
-        !std::equal(shape, shape + ndim, out_shape.begin())) {
-        throw std::invalid_argument("Output array has incorrect shape.");
-    }
-    if (!PyArray_ISCONTIGUOUS(pao)) {
-        throw std::invalid_argument("Output array must be C-contiguous");
+    if (!out_shape.equal(out.shape())) {
+        throw std::invalid_argument("out array has incorrect shape");
     }
     if (out.dtype().not_equal(dtype)) {
-        const py::handle& handle = dtype;
-        throw std::invalid_argument("wrong out dtype, expected " +
-                                    std::string(py::str(handle)));
+        throw std::invalid_argument("out array has wrong dtype, expected " +
+                                    std::string(py::str(dtype)));
+    }
+
+    PyArrayObject *pao = reinterpret_cast<PyArrayObject*>(out.ptr());
+    if (!PyArray_ISCONTIGUOUS(pao)) {
+        throw std::invalid_argument("out array must be C-contiguous");
     }
     if (!PyArray_ISBEHAVED(pao)) {
         throw std::invalid_argument(
@@ -827,110 +856,142 @@ py::array prepare_output(py::object out_obj, py::array x, py::array y, py::objec
     }
     return out;
 }
+
+StridedView2D<void> get_strided_view(const py::array &arr) {
+
+    ArrayDescriptor desc = get_descriptor(arr);
+    StridedView2D<void> view;
+    view.strides = {desc.strides[0], desc.strides[1]};
+    view.shape = {desc.shape[0], desc.shape[1]}; // TODO: check dim
+    view.data = arr.data(); // TODO: get mutable
+    return view;
 }
 
-//template <typename T, char op>
-//py::array _mahalanobis_disp(py::array_t<T> x, py::array_t<T> y,
+template <typename T, typename Distance>
+void compute_distance(const StridedView2D &x, const StridedView &y,
+const StridedView2D &w, StridedView2D &out, char return_type, Distance &&d) {
 
-template <char op>
-py::array _mahalanobis_xdist(py::object out_obj, py::object x_obj,
-                             py::object y_obj, py::object w_obj,
-                             py::object vi_obj) {
-
-    py::array x = npy_asarray(x_obj);
-    if (x.ndim() != 2) {
-        throw std::invalid_argument("XA must be a 2-dimensional array.");
+    const intptr_t p = x.shape[0];
+    const intptr_t q = y.shape[0];
+    const intptr_t n = x.shape[1];
+    if (y.shape[1] != n) {
+        throw std::invalid_argument();
+    }
+    if (w.shape[0] != n || w.shape[1] != n) {
+        throw std::invalid_argument();
     }
 
-    py::array y = npy_asarray(y_obj);
-    if (y.ndim() != 2) {
-        throw std::invalid_argument("XB must be a 2-dimensional array.");
+    if (return_type == RETURN_FULL) {
+
+
+
     }
 
-    if (x.shape(1) != y.shape(1)) {
-        throw std::invalid_argument(
-            "XA and XB must have the same number of columns "
-            "(i.e. feature dimension).");
-    }
+    // x_view has "logical" shape p-by-n, but the row stride is 0, so the
+    // current row automatically broadcasts.
+    StridedView2D<const T> x_view;
+    x_view.shape = {p, n};
+    x_view.strides = {0, x.strides[1]};
+    x_view.data = static_cast<const T*>(x.data);
 
-    const intptr_t num_rowsX = x.shape[0];
-    const intptr_t num_rowsY = y.shape[0];
-    std::array<intptr_t, 2> out_shape;
-    switch (op) {
-    case '*': // cdist
-        out_shape[0] = num_rowsX;
-        out_shape[1] = num_rowsY;
-        break;
-    case '<': // pdist
-        if (num_rowsX != num_rowsY) {
-            throw std::invalid_argument(
-                "XA and XB must have the same number of rows");
+    // y_view maps directly to the actual y.
+    StridedView2D<const T> y_view;
+    y_view.shape = y.shape;
+    y_view.strides = y.strides;
+    y_view.data = static_cast<const T*>(y.data);
+
+    // w_view depends on the dimension of w.
+    // If w is a scalar or a vector, w_view is also a vector.
+    // If w is a matrix, w_view is a square matrix.
+    // TODO
+
+    // out_view is an
+    StridedView2D<T> out_view;
+    out_view.strides = {out.strides[1], 0};
+    out_view.shape = {num_rowsY, num_cols};
+    out_view.data = out_data;
+
+    for (intptr_t i = 0; i < p; ++i) {
+        for (intptr_t j = 0; j < q; ++j) {
+            *out++ = d(x[i], y[j])
         }
-        out_shape[0] = num_rowsX * (num_rowsX - 1) / 2;
-        out_shape[1] = 0;
-        break;
-    case '=':
-        if (num_rowsX != num_rowsY) {
-            throw std::invalid_argument(
-                "XA and XB must have the same number of rows");
+    }
+        f(out_view, x_view, y_view);
+
+        out_view.data += out.strides[0];
+        x_view.data += x.strides[0];
+    }
+}
+
+py::array xdist_mahalanobis(char return_type, py::object x_obj, py::object y_obj,
+                            py::object w_obj, py::object out_obj) {
+
+    auto xy = prepare_input_for_real_metric(x_obj, y_obj, w_obj, return_type);
+    py::array x = xy.first;
+    py::array y = xy.second;
+    py::array w = prepare_weight_for_real_metric(x, y, w_obj, 2, 2);
+    py::array out = prepare_output_for_real_metric(x, y, w, return_type, out_obj);
+
+    StridedView2D x_view = get_strided_view(x);
+    StridedView2D y_view = get_strided_view(y);
+    StridedView2D w_view = get_strided_view(w);
+    StridedView2D out_view = get_mutable_strided_view(out);
+
+    py::dtype dtype = x.dtype();
+    int typenum = dtype.typenum();
+
+
+    StridedView2D<T> out_view;
+    out_view.strides = {out.strides[1], 0};
+    out_view.shape = {num_rowsY, num_cols};
+    out_view.data = out_data;
+
+    StridedView2D<const void> x_view;
+    x_view.shape = {x_desc.shape[0], x_desc.shape[1]};
+    x_view.strides = {x_desc.strides[0], x_desc.strides[1]};
+    x_view.data = x_data;
+
+    StridedView2D<const T> y_view;
+    y_view.strides = {y.strides[0], y.strides[1]};
+    y_view.shape = {out_view.shape[0], num_cols};
+    y_view.data = y_data;
+
+    // Release the GIL in the below scope.  If nested code wants to call
+    // Python, it must acquire the GIL first.
+    {
+        py::gil_scoped_release guard;
+        cdist_impl(out_desc, out_data, x_desc, x_data, y_desc, y_data, f);
+        switch (typenum) {
+        case NPY_FLOAT:
+            MahalanobisDistance<float>::compute(out, x, y, w);
+            break;
+        case NPY_DOUBLE:
+
+
+        void cdist_impl(ArrayDescriptor out, T* out_data,
+                ArrayDescriptor x, const T* x_data,
+                ArrayDescriptor y, const T* y_data,
+                DistanceFunc<T> f) {
+
+
+
+            MahalanobisDistance<double>::compute(out, x, y, w);
+
+
+            break;
+        case NPY_LONGDOUBLE:
+            MahalanobisDistance<long double>::compute(out, x, y, w);
+            break;
+        default:
+            throw std::invalid_argument("unexpected dtype");
         }
-        out_shape[0] = num_rowsX;
-        out_shape[1] = 0;
-        break;
-    default:
-        static_assert(false, "invalid op");
     }
-
-    py::dtype dtype = promote_type_real(common_type(x.dtype(), y.dtype()));
-    py::array out = prepare_out_argument(out_obj, dtype, out_shape);
-
-        DISPATCH_DTYPE(dtype, [&]{
-            cdist_unweighted<scalar_t>(out, x, y, f);
-        });
-        return out;
-    }
-
-    auto w = prepare_single_weight(w_obj, m);
-    auto dtype = promote_type_real(
-        common_type(x.dtype(), y.dtype(), w.dtype()));
-    auto out = prepare_out_argument(out_obj, dtype, out_shape);
-    DISPATCH_DTYPE(dtype, [&]{
-        cdist_weighted<scalar_t>(out, x, y, w, f);
-    });
     return out;
 }
 
-#if 0
-// Converts 'obj' to a square 2-D array of unspecified dtype and flags.
-// Throws exception on error.
-py::array _prepare_square_matrix(const py::object& obj, const std::string& name) {
-    py::array a = npy_asarray(obj);
-    if (a.ndim() != 2) {
-        throw std::invalid_argument(name + " must be a 2-dimensional array.");
-    }
-    if (a.shape(0) != a.shape(1)) {
-        throw std::invalid_argument(name + " must be a square matrix.");
-    }
-
-    std::array<intptr_t, 2> out_shape{{x.shape(0), y.shape(0)}};
-    if (w_obj.is_none()) {
-        auto dtype = promote_type_real(common_type(x.dtype(), y.dtype()));
-        auto out = prepare_out_argument(out_obj, dtype, out_shape);
-        DISPATCH_DTYPE(dtype, [&]{
-            cdist_unweighted<scalar_t>(out, x, y, f);
-        });
-        return out;
-    }
-
-    auto w = prepare_single_weight(w_obj, m);
-    auto dtype = promote_type_real(
-        common_type(x.dtype(), y.dtype(), w.dtype()));
-    auto out = prepare_out_argument(out_obj, dtype, out_shape);
-    DISPATCH_DTYPE(dtype, [&]{
-        cdist_weighted<scalar_t>(out, x, y, w, f);
-    });
-    return out;
-#endif
+///////////////////////////////////////////////////////////////
+// END OF NEW STUFF
+///////////////////////////////////////////////////////////////
 
 PYBIND11_MODULE(_distance_pybind, m) {
     if (_import_array() != 0) {
@@ -939,9 +1000,10 @@ PYBIND11_MODULE(_distance_pybind, m) {
     using namespace pybind11::literals;
 
     // Helper functions.
-    m.def("prepare_float_input", prepare_float_input,
+    m.def("prepare_input_for_real_metric", prepare_input_for_real_metric,
           "x"_a, "y"_a, "w"_a, "op"_a);
-    m.def("prepare_weight", prepare_weight, "w"_a, "ndim"_a, "x"_a);
+    m.def("prepare_weight_for_real_metric", prepare_weight_for_real_metric,
+          "x"_a, "y"_a, "w"_a, "desired_ndim"_a, "minimum_ndim"_a);
 
     // Individual distance functions.
     m.def("pdist_canberra",
