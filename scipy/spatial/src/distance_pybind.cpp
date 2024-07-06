@@ -8,47 +8,46 @@
 // -----------
 // For each distance metric <metric>, the entry point has the signature
 //
-//   <metric>_xdist(extract, x, y, *, w=None, out=None, **kwargs)
+//   xdist_<metric>(return_type, x, y, *, out=None, **kwargs)
 //
 // where
 //
-//   - `extract` specifies the part of result to return (see below);
+//   - `return_type` specifies the part of result to return (see below);
 //   - `x` is a p-by-n array containing p observations each of length n;
 //   - `y` is a q-by-n array containing q observations each of length n;
 //   - `w` is a metric-specific weight scalar, n-vector, or n-by-n matrix;
 //   - `out` is a contiguous output buffer with proper shape and dtype; and
-//   - `kwargs` contain extra metric-specific parameters, such as p for
-//     minkowski.
+//   - `kwargs` contain extra metric-specific parameters, such as `w` for
+//      weight vector and `p` for minkowski order.
 //
 // Conceptually, the function computes a p-by-q matrix of distances between
-// each vector in `x` and `y`.  The `extract` argument specifies the part of
-// this matrix to return, which can be one of the following:
+// each vector in `x` and `y`.  The `return_type` argument specifies the part
+// of this matrix to return; it can be one of the following:
 //
-//   EXTRACT_FULL   return the full p-by-q distance matrix; used by 'cdist'
-//   EXTRACT_UPPER  return the upper half of the (square) distance matrix,
+//   RETURN_FULL    return the full p-by-q distance matrix; used by 'cdist'
+//   RETURN_UPPER   return the upper half of the (square) distance matrix,
 //                  excluding the diagonal, as a vector traversed in row-major
 //                  order; used by 'pdist'
-//   EXTRACT_DIAG   return the diagonal of the (square) distance matrix; for
-//                  future use
+//   RETURN_DIAG    return the diagonal of the (square) distance matrix as
+//                  a vector; reserved for future use
 //
-// A few helper functions that perform input validation are also exported
-// for use by the Python code.
+// In addition, a few helper functions are exported for use by the Python code
+// to perform input validation.
 //
 // Type promotion
 // --------------
-// The output distance matrix will have a dtype determined from the dtypes
-// of x, y, and w (if supplied), according to rules prescribed below.  The
-// purpose of not always returning `double` is (1) to support potentially
-// higher precision (i.e. long double), and (2) to support lower precision
-// (i.e. float32) if desired.
+// There are three kinds of dtypes used by the computation routines: the
+// return type, the working type, and the storage type.  These types are
+// determined from the dtype of x, y, and optionally extra dtypes (such as
+// that of w).
 //
-// Type promotion occurs in three places: the return type, the working type,
-// and the storage type,
-//
+// The return type is the dtype of the returned distance matrix (or vector).
 // The return type will always be a *native floating type*, i.e. one of C's
 // `float`, `double`, or `long double`.  The *native floating type* for a
-// floating dtype is defined in the obvious manner.  The *native floating
-// type* of any other dtype is `double`.
+// floating dtype is itself it is one of those three types; otherwise, it is
+// `float` if the dtype contains no more than 32 bits, `double` if the dtype
+// contains more than 32 bits but no more than 64 bits, and `long double`
+// otherwise.  The *native floating type* of any other dtype is `double`.
 //
 // The working type is the type in which computations are performed.  It is
 // equal to the return type, unless the return type is `float`, in which case
@@ -59,7 +58,7 @@
 //
 // The metrics are classified into three groups according to the domain of
 // the vectors for which they are defined.  The type promotion rules are
-// defined accordingly.
+// defined for each group as follows.
 //
 //   1. Metric defined for real vectors, including (12):
 //
@@ -69,9 +68,9 @@
 //
 //      For these metrics, the return type is the widest *native floating
 //      type* of x, y, and w (if supplied).  The storage type is equal to
-//      the return type.  Loss of precision is possible, for example by
-//      converting two large `int64` values that differ by one to `double`.
-
+//      the return type.  Type promotion may lead to loss of precision, for
+//      example by converting large `int64` values to `double`.
+//
 //   2. Metrics defined for boolean vectors, including (7):
 //
 //        dice, kulczynski1, rogerstanimoto, russellrao, sokalmichener,
@@ -105,9 +104,6 @@
 
 #include <sstream>
 #include <string>
-
-#define EXTRACT_FULL ('c')
-#define EXTRACT_UPPER ('p')
 
 namespace py = pybind11;
 
@@ -659,22 +655,27 @@ py::array cdist(const py::object& out_obj, const py::object& x_obj,
 // NEW STUFF
 ////////////////////////////////////////////////////
 
+#define RETURN_FULL  ('c')
+#define RETURN_UPPER ('p')
+#define RETURN_DIAG  ('v') /* for future use */
+
 // Get the *native floating type* for the given dtype.
 //
-// If dtype is already a floating type, return float, double, or long double,
-// whichever is closest.  Otherwise, return default_typenum. ????
-//
-// There is no guarantee that the underlying array is actually convertible
-// to the returned type.  An error will occur at the point of conversion if
-// this is not possible.
-py::dtype get_native_floating_type(const py::dtype& dtype, int default_typenum) {
+// There is no guarantee that the given dtype is convertible to the returned
+// dtype.  An error will occur at the point of conversion if conversion fails
+py::dtype get_native_floating_type(const py::dtype& dtype) {
     if (dtype.kind() == 'f') {
-        auto size = dtype.itemsize();
-        int typenum = (size <= 4) ? NPY_FLOAT :
-                      (size > 8) ? NPY_LONGDOUBLE : NPY_DOUBLE;
+        int typenum = dtype.typenum();
+        if (typenum == NPY_FLOAT || typenum == NPY_DOUBLE || typenum == NPY_LONGDOUBLE) {
+            return dtype;
+        }
+        auto itemsize = dtype.itemsize();
+        typenum = (itemsize <= 4) ? NPY_FLOAT :
+                  (itemsize <= 8) ? NPY_DOUBLE : NPY_LONGDOUBLE;
         return py::dtype(typenum);
     } else {
-        return py::dtype(default_typenum);
+        return py::dtype(NPY_DOUBLE);
+    }
 }
 
 // Prepare input array x and y for use by a metric defined for real vectors.

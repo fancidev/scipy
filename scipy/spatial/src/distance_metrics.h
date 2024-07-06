@@ -774,30 +774,33 @@ struct YuleDistance {
     }
 };
 
+inline void Precondition(bool condition) {
+    // do nothing
+}
+
 // Straightforward implementation of Mahalanobis distance with known inverse
-// covariance matrix.  The time complexity is O(p*q*n^2), where p := number
-// of rows in X, q := number of rows in Y, and n := number of columns.
+// covariance matrix.  The time complexity is O(p*q*n^2), where p, n = X.shape
+// and q, n = Y.shape.
 template <typename T>
 struct MahalanobisDistance {
-    StridedView2D<T> vi; // n-by-n square (inverse covariance) matrix
+    MatrixView<T> w; // non-owning view of n-by-n weight matrix
 
-    void operator()(StridedView2D<T> out, StridedView2D<const T> x, StridedView2D<const T> y) const {
-        // precondition: out(m*1), x(m*n), y(m*n), vi(n*n)
+    T operator()(const VectorView<const T> &x, const VectorView<const T> &y) const {
+        const intptr_t n = w.shape[0];
+        Precondition(x.size() == n && y.size() == n);
 
-        const intptr_t m = x.shape[0];
-        const intptr_t n = x.shape[1];
-        for (intptr_t index = 0; index < m; ++index) {
-            T s = T(0);
-            for (intptr_t i = 0; i < n; ++i) {
-                for (intptr_t j = 0; j < n; ++j) {
-                    s += x(index, i) * vi(i, j) * y(index, j);
-                }
+        using working_type = typename std::conditional<
+            std::is_same<T, float>::value, double, T>::type;
+
+        working_type s = working_type(0);
+        for (intptr_t i = 0; i < n; ++i) {
+            working_type t = working_type(0);
+            const VectorView<T> &w_i = w[i];
+            for (intptr_t j = 0; j < n; ++j) {
+                t += static_cast<working_type>(w_i[j]) * static_cast<working_type>(y[j]);
             }
-            out(index, 0) = dist;
+            s += static_cast<working_type>(x[i]) * t;
         }
-    }
-
-    void operator()(StridedView2D<T> out, StridedView2D<const T> x, StridedView2D<const T> y, StridedView2D<const T> w) const {
-        throw std::invalid_argument("not implemented");
+        return static_cast<T>(s);
     }
 };
