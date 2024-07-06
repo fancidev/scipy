@@ -1,3 +1,91 @@
+// This file contains the C++ implementation of the distance metrics.
+//
+// This improves performance over a pure Python implementation by eliminating
+// the Python loop overhead and in some cases reducing the space complexity.
+// The C++ implementation works exclusively with NumPy arrays.
+//
+// Entry point
+// -----------
+// For each distance metric <metric>, the entry point has the signature
+//
+//   <metric>_xdist(extract, x, y, *, w=None, out=None, **kwargs)
+//
+// where
+//
+//   - `extract` specifies the part of result to return (see below);
+//   - `x` is a p-by-n array containing p observations each of length n;
+//   - `y` is a q-by-n array containing q observations each of length n;
+//   - `w` is a metric-specific weight scalar, n-vector, or n-by-n matrix;
+//   - `out` is a contiguous output buffer with proper shape and dtype; and
+//   - `kwargs` contain extra metric-specific parameters, such as p for
+//     minkowski.
+//
+// Conceptually, the function computes a p-by-q matrix of distances between
+// each vector in `x` and `y`.  The `extract` argument specifies the part of
+// this matrix to return, which can be one of the following:
+//
+//   EXTRACT_FULL   return the full p-by-q distance matrix; used by 'cdist'
+//   EXTRACT_UPPER  return the upper half of the (square) distance matrix,
+//                  excluding the diagonal, as a vector traversed in row-major
+//                  order; used by 'pdist'
+//   EXTRACT_DIAG   return the diagonal of the (square) distance matrix; for
+//                  future use
+//
+// A few helper functions that perform input validation are also exported
+// for use by the Python code.
+//
+// Type promotion
+// --------------
+// The output distance matrix will have a dtype determined from the dtypes
+// of x, y, and w (if supplied), according to rules prescribed below.  The
+// purpose of not always returning `double` is (1) to support potentially
+// higher precision (i.e. long double), and (2) to support lower precision
+// (i.e. float32) if desired.
+//
+// Type promotion occurs in three places: the return type, the working type,
+// and the storage type,
+//
+// The return type will always be a *native floating type*, i.e. one of C's
+// `float`, `double`, or `long double`.  The *native floating type* for a
+// floating dtype is defined in the obvious manner.  The *native floating
+// type* of any other dtype is `double`.
+//
+// The storage type is what x, y, and w (if supplied) are promoted to before
+// doing the calculation.  [THIS PARAGRAPH IS TO BE COMPLETED.]
+//
+// The working type is the type in which computations are performed.  It is
+// equal to the return type, unless the return type is `float`, in which case
+// the working type is `double`.
+//
+// The metrics are classified into three groups according to the domain of
+// the vectors for which they are defined.  The type promotion rules are
+// defined accordingly.
+//
+//   1. Metric defined for real vectors, including (12):
+//
+//        braycurtis, canberra, chebyshev, cityblock, correlation, cosine,
+//        euclidean, jensenshannon, mahalanobis, minkowski, seuclidean,
+//        sqeuclidean
+//
+//      For these metrics, the return type is the widest *native floating
+//      type* of x, y, and w (if supplied).
+//
+//   2. Metrics defined for boolean vectors, including (7):
+//
+//        dice, kulczynski1, rogerstanimoto, russellrao, sokalmichener,
+//        sokalsneath, yule
+//
+//      For these metrics, the return type is the *native floating type*
+//      of w if it is supplied, or `double` otherwise.
+//
+//   3. Metrics defined for general vectors, including (2):
+//
+//        hamming, jaccard
+//
+//      For these metrics, the return type is the *native floating type*
+//      of w if it is supplied, or `double` otherwise.
+//
+
 #include <pybind11/pybind11.h>
 #include <pybind11/numpy.h>
 #include <pybind11/stl.h>
@@ -11,6 +99,9 @@
 
 #include <sstream>
 #include <string>
+
+#define EXTRACT_FULL ('c')
+#define EXTRACT_UPPER ('p')
 
 namespace py = pybind11;
 
@@ -255,6 +346,16 @@ py::array_t<T> npy_asarray(const py::handle& obj, int flags = 0) {
         throw py::error_already_set();
     }
     return py::reinterpret_steal<py::array_t<T>>(arr);
+}
+
+// Cast python object to NumPy array of given dtype.
+// flags can be any NumPy array constructor flags.
+py::array npy_asarray(const py::handle& obj, py::dtype dtype, int flags = 0) {
+    PyObject* arr = PyArray_FromAny(obj.ptr(), dtype.release().ptr(), 0, 0, flags, nullptr);
+    if (arr == nullptr) {
+        throw py::error_already_set();
+    }
+    return py::reinterpret_steal<py::array>(arr);
 }
 
 // Cast python object to NumPy array with unspecified dtype.
@@ -548,6 +649,186 @@ py::array cdist(const py::object& out_obj, const py::object& x_obj,
     return out;
 }
 
+////////////////////////////////////////////////////
+// NEW STUFF
+////////////////////////////////////////////////////
+
+// Get the floating storage type suitable for traversing an array with the
+// given dtype.
+//
+// If dtype is already a floating type, return float, double, or long double,
+// whichever is closest.  Otherwise, return default_typenum.
+//
+// If the underlying array is not convertible to the returned dtype (e.g. if
+// it contains strings), the error will occur at the point of conversion.
+py::dtype get_floating_type(const py::dtype& dtype, int default_typenum) {
+    if (dtype.kind() == 'f') {
+        auto size = dtype.itemsize();
+        int typenum = (size <= 4) ? NPY_FLOAT :
+                      (size > 8) ? NPY_LONGDOUBLE : NPY_DOUBLE;
+        return py::dtype(typenum);
+    } else {
+        return py::dtype(default_typenum);
+}
+
+// Prepare and validate input x and y, which are to be treated as floating
+// type values.
+//
+// Return prepared (x, y) such that they have native floating point dtype
+// with at least as many bits as the original x, y, and w (if supplied).
+//
+// For efficiency, w_obj should be an np.array if not None.
+std::pair<py::array, py::array> prepare_floating_input(
+    py::object x_obj, py::object y_obj, py::object w_obj, char extract) {
+
+    // Detect identity to save redundant conversions.
+    const bool x_is_y = (x_obj.ptr() == y_obj.ptr());
+
+    // Convert to np.array without requirement on dtype or layout in order
+    // to check shape first.
+    py::array x = npy_asarray(x_obj);
+    if (x.ndim() != 2) {
+        throw std::invalid_argument("XA must be a 2-dimensional array.");
+    }
+
+    py::array y = x_is_y ? x : npy_asarray(y_obj);
+    if (y.ndim() != 2) {
+        throw std::invalid_argument("XB must be a 2-dimensional array.");
+    }
+
+    if (x.shape(1) != y.shape(1)) {
+        throw std::invalid_argument(
+            "XA and XB must have the same number of columns "
+            "(i.e. feature dimension).");
+    }
+
+    if (extract != EXTRACT_FULL) {
+        if (x.shape(0) != y.shape(0)) {
+            throw std::invalid_argument("XA and XB must have the same number of rows");
+        }
+    }
+
+    py::dtype dtype;
+    if (!w_obj.is_none()) {
+        // w is supplied; determine dtype from x and y, and default to double
+        dtype = get_floating_type(common_type(x.dtype(), y.dtype()), NPY_DOUBLE);
+    } else {
+        // w is supplied; determine dtype from x, y, and w
+        py::array w = npy_asarray(w_obj);
+        py::dtype dtype = get_floating_type(
+            common_type(x.dtype(), y.dtype(), w.dtype()), NPY_DOUBLE);
+    }
+
+    // Convert x and y to the desired dtype and layout.
+    x = npy_asarray(x, dtype, NPY_ARRAY_ALIGNED | NPY_ARRAY_NOTSWAPPED);
+    y = x_is_y ? x : npy_asarray(y, dtype, NPY_ARRAY_ALIGNED | NPY_ARRAY_NOTSWAPPED);
+    return {x, y};
+)
+
+// Prepare and validate weight scalar, vector or matrix.
+// x and y MUST already be prepared.  w must not be None.
+// desired_ndim is the ndim of the weight to return; 0 for 0D array (scalar),
+// 1 for n-vector, 2 for n-by-n square matrix.
+// minimum_ndim is the smallest allowed ndim, that allows conversion according
+// to the following rules:
+//
+//   desired_ndim  ndim  conversion
+//   ------------------------------
+//   1             0     [w,w,...,w]
+//   2             0     diag([w,w,...,w])
+//   2             1     diag(w)
+//
+py::array prepare_weight(py::array x, py::array y, py::object w_obj,
+                         int desired_ndim, int minimum_ndim) {
+    if (!(desired_ndim >= 0 && desired_ndim <= 2)) {
+        throw std::invalid_argument("desired_ndim must be 0, 1 or 2");
+    }
+    if (!(minimum_ndim >= 0 && minimum_ndim <= desired_ndim)) {
+        throw std::invalid_argument("minimum_ndim must be between 0 and desired_ndim");
+    }
+
+    py::array w = npy_asarray(w_obj);
+
+    const int ndim = w.ndim();
+    if (!(ndim >= minimum_ndim && ndim <= desired_ndim)) {
+        std::stringstream msg;
+        msg << "Weight must have ndim between " << minimum_ndim << " and " << desired_ndim;
+        throw std::invalid_argument(msg.str());
+    }
+
+    if (x.ndim() != 2) {
+        throw std::invalid_argument("x must be 2-dimensional");
+    }
+    const intptr_t n = x.shape(1);
+
+    if (ndim == 1) {
+        if (w.shape(0) != n) {
+            throw std::invalid_argument("weight has wrong shape");
+        }
+    } else if (ndim == 2) {
+        if (w.shape(0) != n || w.shape(1) != n) {
+            throw std::invalid_argument("weight has wrong shape");
+        }
+    }
+
+    if (minimum_ndim != desired_ndim) {
+        throw std::runtime_error("not implemented");
+    }
+
+    // Determine the required dtype, which *must* be a floating type, and
+    // which must at least have the same accuracy as itself.  Note that w
+    // will have a floating type even if x, y is non-floating, such as bool.
+    py::dtype xy_dtype = get_floating_type(common_type(x.dtype(), y.dtype()), NPY_FLOAT);
+    py::dtype dtype = get_floating_type(common_type(xy_dtype, w.dtype()), NPY_DOUBLE);
+    w = npy_asarray(w_obj, dtype, NPY_ARRAY_ALIGNED | NPY_ARRAY_NOTSWAPPED);
+    return w;
+}
+
+py::array prepare_output(py::object out_obj, py::array x, py::array y, py::object w,)
+{
+    // Compute output shape.
+    auto [p, q, r, op, xy_dtype, w_dtype] = config_base{};
+    if (op == 'c') {
+        std::array<int, 2> out_shape {p, q};
+    } else if (op == 'p') {
+        std::array<int, 1> out_shape {p * (p - 1) / 2};
+    } else {
+        throw std::invalid_argument("invalid op");
+    }
+
+    if (out_obj.is_none()) {
+        return py::array(dtype, out_shape);
+    }
+
+    if (!py::isinstance<py::array>(obj)) {
+        throw py::type_error("out argument must be an ndarray");
+    }
+
+    py::array out = py::cast<py::array>(obj);
+    const auto ndim = out.ndim();
+    const auto shape = out.shape();
+    auto pao = reinterpret_cast<PyArrayObject*>(out.ptr());
+
+    if (ndim != static_cast<intptr_t>(out_shape.size()) ||
+        !std::equal(shape, shape + ndim, out_shape.begin())) {
+        throw std::invalid_argument("Output array has incorrect shape.");
+    }
+    if (!PyArray_ISCONTIGUOUS(pao)) {
+        throw std::invalid_argument("Output array must be C-contiguous");
+    }
+    if (out.dtype().not_equal(dtype)) {
+        const py::handle& handle = dtype;
+        throw std::invalid_argument("wrong out dtype, expected " +
+                                    std::string(py::str(handle)));
+    }
+    if (!PyArray_ISBEHAVED(pao)) {
+        throw std::invalid_argument(
+            "out array must be aligned, writable and native byte order");
+    }
+    return out;
+}
+}
+
 //template <typename T, char op>
 //py::array _mahalanobis_disp(py::array_t<T> x, py::array_t<T> y,
 
@@ -656,6 +937,13 @@ PYBIND11_MODULE(_distance_pybind, m) {
         throw py::error_already_set();
     }
     using namespace pybind11::literals;
+
+    // Helper functions.
+    m.def("prepare_float_input", prepare_float_input,
+          "x"_a, "y"_a, "w"_a, "op"_a);
+    m.def("prepare_weight", prepare_weight, "w"_a, "ndim"_a, "x"_a);
+
+    // Individual distance functions.
     m.def("pdist_canberra",
           [](py::object x, py::object w, py::object out) {
               return pdist(out, x, w, CanberraDistance{});

@@ -230,77 +230,6 @@ def _validate_hamming_kwargs(X, m, n, **kwargs):
     return kwargs
 
 
-def _validate_mahalanobis_kwargs(X, m, n, **kwargs):
-    VI = kwargs.pop('VI', None)
-    if VI is None:
-        if m <= n:
-            # There are fewer observations than the dimension of
-            # the observations.
-            raise ValueError("The number of observations (%d) is too "
-                             "small; the covariance matrix is "
-                             "singular. For observations with %d "
-                             "dimensions, at least %d observations "
-                             "are required." % (m, n, n + 1))
-        if isinstance(X, tuple):
-            X = np.vstack(X)
-        CV = np.atleast_2d(np.cov(X.astype(np.float64, copy=False).T))
-        VI = np.linalg.inv(CV).T.copy()  # XXX: why .T?
-    kwargs["VI"] = _convert_to_double(VI)
-    return kwargs
-
-
-def _mahalanobis_cdist(XA, XB, *, out=None, w=None, VI=None):
-    XA = _validate_matrix(XA)
-    XB = _validate_matrix(XB)
-
-    # X = np.ascontiguousarray(XA)
-    # X = np.ascontiguousarray(XB)
-    p, n = XA.shape
-    q, _ = XB.shape
-    if n != XB.shape[1]:
-        raise ValueError
-    if VI is None:
-        raise NotImplementedError
-
-    # Validate VI
-
-
-
-    # XA, XB, typ, kwargs = _validate_cdist_input(
-    #    XA, XB, mA, mB, n, metric_info, **kwargs)
-
-    if w is not None:
-        raise NotImplementedError
-
-    if VI is None:
-        raise NotImplementedError
-
-    # For p, q much less than n, the straightforward method is more efficient.
-    if p*q*n < p+q+n:
-
-        dm = _prepare_out_argument(out, np.float64, (mA, mB))
-        # get cdist wrapper
-        cdist_fn = getattr(_distance_wrap,
-                           f'cdist_{metric_name}_{typ}_wrap')
-        cdist_fn(XA, XB, dm, **kwargs)
-        return dm
-
-    # In general, whiten the input matrices and then compute Euclidean distance.
-
-    VI = 0.5 * (VI + VI.T)  # ensure VI is symmetric
-    try:
-        # Try Cholesky decomposition, which works for positive-definite VI.
-        L = np.linalg.cholesky(VI)  # VI == L @ L.T
-    except np.linalg.LinAlgError:
-        # Cholesky fails, likely because VI not being positive-definite.
-        # Use SVD in this case to allow "opportunistic" distance calculation.
-        U, D, _ = np.linalg.svd(VI, hermitian=True)  # VI == U @ diag(D) @ U.T
-        return cdist(XA @ U, XB @ U, 'euclidean', w=D)
-    else:
-        # Cholesky decomposition successful.
-        return cdist(XA @ L, XB @ L, 'euclidean')
-
-
 def _validate_minkowski_kwargs(X, m, n, **kwargs):
     kwargs = _validate_weight_with_size(X, m, n, **kwargs)
     if 'p' not in kwargs:
@@ -1081,10 +1010,55 @@ def mahalanobis(u, v, VI):
     """
     u = _validate_vector(u)
     v = _validate_vector(v)
-    VI = np.atleast_2d(VI)
-    delta = u - v
-    m = np.dot(np.dot(delta, VI), delta)
-    return np.sqrt(m)
+    XA = np.atleast_2d(u)
+    XB = np.atleast_2d(v)
+    result = _mahalanobis_xdist(XA, XB, _op='c', VI=VI)
+    return result[0, 0]
+
+
+def _mahalanobis_xdist(op, XA, XB, *, out=None, VI=None):
+    x, y = _distance_pybind.prepare_float_input(XA, XB, None, op)
+    p, n = x.shape
+    q, _ = y.shape
+
+    if VI is None:
+        # Inverse covariance matrix is not supplied.  Use the sample covariance
+        # assuming the input as being independent observations.
+        sample = x if op == 'p' else np.vstack([x, y])
+        sample_size = sample.shape[0]
+        if sample_size <= n:
+            # There are fewer observations than the dimension of
+            # the observations.
+            raise ValueError("The number of observations (%d) is too "
+                             "small; the covariance matrix is "
+                             "singular. For observations with %d "
+                             "dimensions, at least %d observations "
+                             "are required." % (sample_size, n, n + 1))
+        sample_covar = np.atleast_2d(np.cov(sample, rowvar=False))
+        w = np.linalg.inv(sample_covar)
+    else:
+        w = _distance_pybind.prepare_weight(VI, 2, x)
+
+    out = _distance_pybind.prepare_output(out, x, y, op)
+
+    # Whiten the input observations using Cholesky decomposition, unless
+    # there are only a small number of vectors to compute, in which case
+    # direct calculation is more efficient.
+    if p*q*n >= p+q+n:
+        w = 0.5 * (w + w.T)  # ensure weight matrix is symmetric
+        try:
+            # Cholesky decomposition requires positive-definite matrix,
+            # but w might not be positive definite if it is supplied by
+            # user directly or if it is (nearly) positive semi-definite.
+            L = np.linalg.cholesky(w)  # w == L @ L.T
+        except np.linalg.LinAlgError:
+            pass
+        else:
+            return _distance_pybind.xdist_euclidean(x @ L, y @ L, out=out, op=op)
+
+    # Now there are only a small number of vectors to compute, or Cholesky
+    # decomposition failed.  Fall back to direct calculation.
+    return _distance_pybind.xdist_mahalanobis(x, y, out=out, w=w, op=op)
 
 
 def chebyshev(u, v, w=None):
@@ -1833,10 +1807,10 @@ _METRIC_INFOS = [
     MetricInfo(
         canonical_name='mahalanobis',
         aka={'mahalanobis', 'mahal', 'mah'},
-        validator=_validate_mahalanobis_kwargs,
+        validator=None,  # _validate_mahalanobis_kwargs,
         dist_func=mahalanobis,
-        cdist_func=CDistMetricWrapper('mahalanobis'),
-        pdist_func=PDistMetricWrapper('mahalanobis'),
+        cdist_func=partial(_mahalanobis_xdist, op='c'),
+        pdist_func=partial(_mahalanobis_xdist, op='p'),
     ),
     MetricInfo(
         canonical_name='minkowski',
