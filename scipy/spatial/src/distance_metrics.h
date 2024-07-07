@@ -778,29 +778,84 @@ inline void Precondition(bool condition) {
     // do nothing
 }
 
+// Remarks: To simplify the code and to limit the number of template
+// instantiations, each distance metric is parameterized by exactly
+// one type parameter, T.  The input dtype, output dtype, as well as the
+// dtype of any additional parameters (such as w) is a function of T.
+
+template <typename T>
+struct EuclideanDistance {
+    using input_type = typename std::remove_cv<T>::type;
+    using output_type = input_dtype;
+    using working_type = typename std::conditional<
+        std::is_same<T, float>::value, double, T>::type;
+
+    output_type operator()(const input_type *x,
+                           const input_type *y,
+                           intptr_t n) const {
+        working_type s = working_type(0);
+        for (intptr_t i = 0; i < n; ++i) {
+            working_type diff = static_cast<working_type>(x[i]) - static_cast<working_type>(y[i]);
+            s += diff * diff;
+        }
+        return static_cast<output_type>(std::sqrt(s));
+    }
+
+    output_type operator()(const input_type *x, intptr_t x_stride,
+                           const input_type *y, intptr_t y_strike,
+                           intptr_t n) const {
+
+        if (x_stride == 1 && y_stride == 1) {
+            return operator()(x, y, n);
+        }
+
+        working_type s = working_type(0);
+        const input_type *xx = x, *yy = y;
+        for (intptr_t i = 0; i < n; ++i) {
+            working_type diff = static_cast<working_type>(*xx) - static_cast<working_type>(*yy);
+            s += diff * diff;
+            xx += x_stride;
+            yy += y_stride;
+        }
+        return static_cast<output_type>(std::sqrt(s));
+    }
+};
+
 // Straightforward implementation of Mahalanobis distance with known inverse
 // covariance matrix.  The time complexity is O(p*q*n^2), where p, n = X.shape
 // and q, n = Y.shape.
 template <typename T>
 struct MahalanobisDistance {
-    MatrixView<T> w; // non-owning view of n-by-n weight matrix
+    MatrixView<T> _w; // non-owning view of n-by-n weight matrix
 
-    T operator()(const VectorView<const T> &x, const VectorView<const T> &y) const {
-        const intptr_t n = w.shape[0];
-        Precondition(x.size() == n && y.size() == n);
+    using input_type = typename std::remove_cv<T>::type;
+    using output_type = input_type;
+    using working_type = typename std::conditional<
+        std::is_same<T, float>::value, double, T>::type;
 
-        using working_type = typename std::conditional<
-            std::is_same<T, float>::value, double, T>::type;
+    output_dtype operator()(const input_type *x, intptr_t x_stride,
+                            const input_type *y, intptr_t y_strike,
+                            intptr_t n) const {
+
+        const input_type *x_i = x;
+        const input_type *w_i = w.data();
+        const intptr_t w_stride_0 = _w.strides[0];
+        const intptr_t w_stride_1 = _w.strides[1];
 
         working_type s = working_type(0);
-        for (intptr_t i = 0; i < n; ++i) {
+        for (intptr_t i = 0; i < n; ++i, ) {
+            const input_type *y_j = y;
+            const input_type *w_ij = w_i;
             working_type t = working_type(0);
-            const VectorView<T> &w_i = w[i];
             for (intptr_t j = 0; j < n; ++j) {
-                t += static_cast<working_type>(w_i[j]) * static_cast<working_type>(y[j]);
+                t += static_cast<working_type>(*w_ij) * static_cast<working_type>(*y_j);
+                y_j += y_stride;
+                w_ij += w_stride_1;
             }
-            s += static_cast<working_type>(x[i]) * t;
+            s += static_cast<working_type>(*x_i) * t;
+            x_i += x_stride;
+            w_i += w_stride_0;
         }
-        return static_cast<T>(s);
+        return static_cast<T>(std::sqrt(s));
     }
 };
