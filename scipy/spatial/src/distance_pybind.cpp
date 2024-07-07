@@ -914,21 +914,18 @@ StridedView2D<void> get_strided_view(const py::array &arr) {
     return view;
 }
 
-template <typename Distance>
-void compute_distance(const py::array &out, const py::array &x, const py::array &y,
-                      char return_type, Distance &&d) {
+template <typename InputType, typename Distance>
+void compute_distance_t(const py::array &out,
+                        const py::array_t<InputType> &x,
+                        const py::array_t<InputType> &y,
+                        char return_type,
+                        const Distance &distance) {
 
-    // Sanity check of inputs to prevent memory corruption
-    if (!(x.ndim() == 2 && y.ndim() == 2 && x.shape(1) == y.shape(1))) {
-        throw std::invalid_argument("x, y has unexpected shape");
-    }
-    if (!(return_type == RETURN_FULL || x.shape(0) == y.shape(0))) {
-        throw std::invalid_argument("x, y has unexpected shape");
-    }
+    // Sanity check is performed by compute_distance()
 
-    // TODO: make sure out is continugous
+    // TODO: make sure out is contiguous !!
 
-    using input_dtype = typename Distance::input_dtype;
+    using input_dtype = InputType;
     using output_dtype = typename Distance::output_dtype;
 
     int input_typenum = py::dtype::of<input_dtype>.typenum();
@@ -944,8 +941,8 @@ void compute_distance(const py::array &out, const py::array &x, const py::array 
     const intptr_t q = y.shape[0];
     const intptr_t n = x.shape[1];
 
-    const input_type * const x_data = static_cast<const input_type*>(x.data());
-    const input_type * const y_data = static_cast<const input_type*>(y.data());
+    const input_type * const x_data = x.data();
+    const input_type * const y_data = y.data();
 
     const intptr_t x_stride_0 = x.stride(0);
     const intptr_t x_stride_1 = x.stride(1);
@@ -958,18 +955,100 @@ void compute_distance(const py::array &out, const py::array &x, const py::array 
     {
         py::gil_scoped_release guard;
 
-        const input_type *xx = x_data;
-        for (intptr_t i = 0; i < p; ++i) {
-            const intptr_t j_first = (return_type == RETURN_FULL) ? 0 : i + 1;
-            const intptr_t j_last = (return_type == RETURN_FULL) ? q : q;
-            const input_type *yy = y_data;
-            for (intptr_t j = j_first; j < j_last; ++j) {
-                *out_data++ = d(xx, x_stride_1, yy, y_stride_1, n);
-                yy += y_stride_0;
+        const bool x_contiguous = (x_stride_1 == 1);
+        const bool y_contiguous = (y_stride_1 == 1);
+        std::vector<InputType> x_buffer{x_contiguous ? 0 : n};
+        std::vector<InputType> y_buffer{y_contiguous ? 0 : n};
+
+        const input_type *x_row = x_data;
+        for (std::size_t i = 0; i < p; ++i) {
+            if (!x_contiguous) /* unlikely */ {
+                for (intptr_t k = 0; k < n; ++k) {
+                    x_buffer[k] = x_row[k * x_stride_1];
+                }
             }
-            xx += x_stride_0;
+            std::span<const input_type> x_span{x_contiguous ? x_row : x_buffer.data(), n};
+
+            const std::size_t j_first = (return_type == RETURN_FULL) ? 0 : i + 1;
+            const std::size_t j_last = (return_type == RETURN_FULL) ? q : q;
+
+            const input_type *y_row = y_data;
+            for (std::size_t j = j_first; j < j_last; ++j) {
+                if (!y_contiguous) /* unlikely */ {
+                    for (intptr_t k = 0; k < n; ++k) {
+                        y_buffer[k] = y_row[k * y_stride_1];
+                    }
+                }
+                std::span<const input_type> y_span{y_contiguous ? y_row : y_buffer.data(), n};
+                auto d = distance(x_span, y_span);
+                *out_data++ = d; // implicit cast here
+                y_row += y_stride_0;
+            }
+            x_row += x_stride_0;
         }
     }
+}
+
+template <typename Distance>
+void compute_distance(const py::array &out, const py::array &x, const py::array &y,
+                      char return_type, const Distance &distance) {
+
+    // Sanity check of inputs to prevent memory corruption
+    if (!(x.ndim() == 2 && y.ndim() == 2 && x.shape(1) == y.shape(1))) {
+        throw std::invalid_argument("x, y has unexpected shape");
+    }
+    if (!(return_type == RETURN_FULL || x.shape(0) == y.shape(0))) {
+        throw std::invalid_argument("x, y has unexpected shape");
+    }
+
+    // TODO: convert from array to array_t
+
+    switch (get_dtype_typenum(x, y)) {
+    case NPY_BOOL:
+        compute_distance_t(return_type, out, py::array_t<bool>(x), py::array_t<bool>(y), distance);
+        break;
+    case NPY_FLOAT:
+        compute_distance_t(return_type, out, x, y, EuclideanDistance<float>{});
+        break;
+    case NPY_DOUBLE:
+        compute_distance<bool>(return_type, out, x, y, EuclideanDistance<double>{});
+        break;
+    case NPY_LONGDOUBLE:
+        compute_distance<bool>(return_type, out, x, y, EuclideanDistance<long double>{});
+        break;
+    default:
+        throw std::invalid_argument("unexpected dtype");
+
+
+
+py::array xdist_dice(char return_type, py::object x_obj, py::object y_obj,
+                     py::object w_obj, py::object out_obj=py::none()) {
+
+    // x, y, w, out: py::array
+    auto [x, y] = prepare_xy(x_obj, y_obj, return_type, MetricDomain::Boolean);
+    py::array out = prepare_out(...);
+
+    if (w_obj.is_none()) {
+//        switch (get_dtype_typenum(out, x, y)) {
+//        case NPY_BOOL:
+            compute_distance(return_type, out, x, y, DiceDistance<double>{});
+            DiceDistance<double>
+//        case NPY_FLOAT:
+//            compute_distance(return_type, out, x, y, EuclideanDistance<float>{});
+//            break;
+//        case NPY_DOUBLE:
+//            compute_distance(return_type, out, x, y, EuclideanDistance<double>{});
+//            break;
+//        case NPY_LONGDOUBLE:
+//            compute_distance(return_type, out, x, y, EuclideanDistance<long double>{});
+//            break;
+//        default:
+//            throw std::invalid_argument("unexpected dtype");
+        }
+    } else {
+
+    }
+    return out;
 }
 
 py::array xdist_euclidean(char return_type, py::object x_obj, py::object y_obj,

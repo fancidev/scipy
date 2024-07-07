@@ -783,6 +783,86 @@ inline void Precondition(bool condition) {
 // one type parameter, T.  The input dtype, output dtype, as well as the
 // dtype of any additional parameters (such as w) is a function of T.
 
+template <typename OutputType /* = double */>
+struct DiceDistance {
+    using output_type = OutputType;
+
+    // Boolean input; "quick path"
+    template <class Span>
+    std::enable_if_t<std::is_same_v<typename Span::value_type, bool>, output_type>
+    operator()(const Span &x, const Span &y) const {
+        Precondition(x.size() == y.size());
+        using working_type = std::size_t;
+
+        std::size_t n = x.size();
+        working_type n_tt = 0;
+        working_type n_tf_ft = 0;
+        for (std::size_t i = 0; i < n; ++i) {
+            bool x_i = x[i];
+            bool y_i = y[i];
+            n_tt += static_cast<working_type>(x_i & y_i);
+            n_tf_ft += static_cast<working_type>(x_i ^ y_i);
+        }
+        // If all values in x and y are zero, nan is returned
+        return static_cast<output_type>(n_tf_ft) / static_cast<output_type>(2*n_tt + n_tf_ft);
+    }
+
+    // General numerical input; "fuzzy" computation
+    // = 1 - 2*sum(x*y)/(sum(x)+sum(y))
+    // x,y are "supposed" to be between 0.0 and 1.0, but this is not checked
+    template <class Span>
+    std::enable_if_t<!std::is_same_v<typename Span::value_type, bool>, output_type>
+    operator()(const Span &x, const Span &y) const {
+        Precondition(x.size() == y.size());
+        using working_type = output_type;
+
+        std::size_t n = x.size();
+        working_type s_tt = 0;
+        working_type s_tf = 0;
+        working_type s_ft = 0;
+        for (std::size_t i = 0; i < n; ++i) {
+            working_type x_i = static_cast<working_type>(x[i]);
+            working_type y_i = static_cast<working_type>(y[i]);
+            s_tt += x_i * y_i;
+            s_tf += x_i * (working_type(1) - y_i);
+            s_ft += (working_type(1) - x_i) * y_i;
+        }
+        // If all values in x and y are zero, nan is returned
+        return (s_tf + s_ft) / (2*s_tt + s_tf + s_ft);
+    }
+};
+
+template <typename OutputType /* = double */,
+          typename WeightType /* = std::span<double> */>
+struct WeightedDiceDistance {
+    using output_type = OutputType;
+
+    WeightType w;
+
+    // == 1 - 2*sum(w*x*y)/(sum(w*x)+sum(w*y))
+    // x,y are "supposed" to be between 0.0 and 1.0, but this is not checked
+    // constant weight is equivalent to no weight
+    template <class Span>
+    output_type operator()(const Span &x, const Span &y) const {
+        Precondition(x.size() == w.size() && y.size() == w.size());
+        using working_type = output_type;
+
+        std::size_t n = x.size();
+        working_type s_tt = 0;
+        working_type s_tf_ft = 0;
+        for (std::size_t i = 0; i < n; ++i) {
+            working_type x_i = static_cast<working_type>(x[i]);
+            working_type y_i = static_cast<working_type>(y[i]);
+            working_type w_i = static_cast<working_type>(w[i]);
+            working_type one = 1;
+            s_tt += w_i * x_i * y_i;
+            s_tf_ft += w_i * ((x_i * (one - y_i) + (one - x_i) * y_i));
+        }
+        // If all values in x and y are zero, nan is returned
+        return (s_tf_ft) / (2*s_tt + s_tf_ft);
+    }
+};
+
 template <typename T>
 struct EuclideanDistance {
     using input_type = typename std::remove_cv<T>::type;
