@@ -783,15 +783,32 @@ inline void Precondition(bool condition) {
 // one type parameter, T.  The input dtype, output dtype, as well as the
 // dtype of any additional parameters (such as w) is a function of T.
 
-template <typename OutputType /* = double */>
-struct DiceDistance {
-    using output_type = OutputType;
+template <class T>
+struct promoted_floating {
+    using type = double;
+};
+
+template <>
+struct promoted_floating<float> {
+    using type = float;
+};
+
+template <>
+struct promoted_floating<long double> {
+    using type = long double;
+};
+
+template <typename T>
+using promoted_floating_t = typename promoted_floating<T>::type;
+
+struct UnweightedDiceDistance {
 
     // Boolean input; "quick path"
     template <class Span>
-    std::enable_if_t<std::is_same_v<typename Span::value_type, bool>, output_type>
+    std::enable_if_t<std::is_same_v<typename Span::value_type, bool>, double>
     operator()(const Span &x, const Span &y) const {
         Precondition(x.size() == y.size());
+        using output_type = double;
         using working_type = std::size_t;
 
         std::size_t n = x.size();
@@ -811,9 +828,11 @@ struct DiceDistance {
     // = 1 - 2*sum(x*y)/(sum(x)+sum(y))
     // x,y are "supposed" to be between 0.0 and 1.0, but this is not checked
     template <class Span>
-    std::enable_if_t<!std::is_same_v<typename Span::value_type, bool>, output_type>
+    std::enable_if_t<!std::is_same_v<typename Span::value_type, bool>,
+                     promoted_floating_t<typename Span::value_type>>
     operator()(const Span &x, const Span &y) const {
         Precondition(x.size() == y.size());
+        using output_type = promoted_floating_t<typename Span::value_type>;
         using working_type = output_type;
 
         std::size_t n = x.size();

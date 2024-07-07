@@ -924,9 +924,11 @@ void compute_distance_t(const py::array &out,
     // Sanity check is performed by compute_distance()
 
     // TODO: make sure out is contiguous !!
+    // TODO: make sure out type matches !!
 
-    using input_dtype = InputType;
-    using output_dtype = typename Distance::output_dtype;
+    using input_type = InputType;
+    using span_type = std::span<const input_type>;
+    using output_type = std::invoke_result_t<Distance, span_type, span_type>;
 
     int input_typenum = py::dtype::of<input_dtype>.typenum();
     int output_typenum = py::dtype::of<output_dtype>.typenum();
@@ -949,12 +951,18 @@ void compute_distance_t(const py::array &out,
     const intptr_t y_stride_0 = y.stride(0);
     const intptr_t y_stride_1 = y.stride(1);
 
-    output_type *out_data = static_cast<output_type*>(out.mutable_data());
+    // TODO: check
+    py::array<output_type> out_typed = out;
+    output_type *out_data = out_typed.mutable_data());
 
     // Release the GIL while running the double loop.
     {
         py::gil_scoped_release guard;
 
+        // If x and/or y is not c-contiguous, allocate a contiguous buffer to
+        // hold the current row of computation, so that the compiler has more
+        // room to optimize and no additional template instantiation is needed
+        // for strided input.
         const bool x_contiguous = (x_stride_1 == 1);
         const bool y_contiguous = (y_stride_1 == 1);
         std::vector<InputType> x_buffer{x_contiguous ? 0 : n};
@@ -980,8 +988,8 @@ void compute_distance_t(const py::array &out,
                     }
                 }
                 std::span<const input_type> y_span{y_contiguous ? y_row : y_buffer.data(), n};
-                auto d = distance(x_span, y_span);
-                *out_data++ = d; // implicit cast here
+                output_type d = distance(x_span, y_span);
+                *out_data++ = d;
                 y_row += y_stride_0;
             }
             x_row += x_stride_0;
@@ -1018,8 +1026,7 @@ void compute_distance(const py::array &out, const py::array &x, const py::array 
         break;
     default:
         throw std::invalid_argument("unexpected dtype");
-
-
+}
 
 py::array xdist_dice(char return_type, py::object x_obj, py::object y_obj,
                      py::object w_obj, py::object out_obj=py::none()) {
@@ -1029,24 +1036,9 @@ py::array xdist_dice(char return_type, py::object x_obj, py::object y_obj,
     py::array out = prepare_out(...);
 
     if (w_obj.is_none()) {
-//        switch (get_dtype_typenum(out, x, y)) {
-//        case NPY_BOOL:
-            compute_distance(return_type, out, x, y, DiceDistance<double>{});
-            DiceDistance<double>
-//        case NPY_FLOAT:
-//            compute_distance(return_type, out, x, y, EuclideanDistance<float>{});
-//            break;
-//        case NPY_DOUBLE:
-//            compute_distance(return_type, out, x, y, EuclideanDistance<double>{});
-//            break;
-//        case NPY_LONGDOUBLE:
-//            compute_distance(return_type, out, x, y, EuclideanDistance<long double>{});
-//            break;
-//        default:
-//            throw std::invalid_argument("unexpected dtype");
-        }
+        compute_distance(return_type, out, x, y, UnweightedDiceDistance{});
     } else {
-
+        // TODO
     }
     return out;
 }
