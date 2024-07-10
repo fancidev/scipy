@@ -15,14 +15,14 @@ namespace py = pybind11;
 
 namespace {
 
-template <typename T>
+template <typename OutputType, typename InputType>
 using DistanceFunc = FunctionRef<
-    void(StridedView2D<T>, StridedView2D<const T>, StridedView2D<const T>)>;
+    void(StridedView2D<OutputType>, StridedView2D<const InputType>, StridedView2D<const InputType>)>;
 
-template <typename T>
+template <typename OutputType, typename InputType, typename WeightType>
 using WeightedDistanceFunc = FunctionRef<
-    void(StridedView2D<T>, StridedView2D<const T>,
-         StridedView2D<const T>, StridedView2D<const T>)>;
+    void(StridedView2D<OutputType>, StridedView2D<const InputType>,
+         StridedView2D<const InputType>, StridedView2D<const WeightType>)>;
 
 // Validate weights are >= 0
 template <typename T>
@@ -67,23 +67,23 @@ void validate_weights(const ArrayDescriptor& w, const T* w_data) {
     }
 }
 
-template <typename T>
-void pdist_impl(ArrayDescriptor out, T* out_data,
-                ArrayDescriptor x, const T* in_data,
-                DistanceFunc<T> f) {
+template <typename OutputType, typename InputType = OutputType>
+void pdist_impl(ArrayDescriptor out, OutputType* out_data,
+                ArrayDescriptor x, const InputType* in_data,
+                DistanceFunc<OutputType, InputType> f) {
     const intptr_t num_rows = x.shape[0], num_cols = x.shape[1];
 
-    StridedView2D<T> out_view;
+    StridedView2D<OutputType> out_view;
     out_view.strides = {out.strides[0], 0};
     out_view.shape = {x.shape[0] - 1, x.shape[1]};
     out_view.data = out_data;
 
-    StridedView2D<const T> x_view;
+    StridedView2D<const InputType> x_view;
     x_view.strides = {x.strides[0], x.strides[1]};
     x_view.shape = {out_view.shape[0], num_cols};
     x_view.data = in_data + x.strides[0];
 
-    StridedView2D<const T> y_view;
+    StridedView2D<const InputType> y_view;
     y_view.strides = {0, x.strides[1]};
     y_view.shape = {out_view.shape[0], num_cols};
     y_view.data = in_data;
@@ -99,31 +99,31 @@ void pdist_impl(ArrayDescriptor out, T* out_data,
     }
 }
 
-template <typename T>
-void pdist_weighted_impl(ArrayDescriptor out, T* out_data,
-                         ArrayDescriptor x, const T* x_data,
-                         ArrayDescriptor w, const T* w_data,
-                         WeightedDistanceFunc<T> f) {
+template <typename OutputType, typename InputType = OutputType, typename WeightType = OutputType>
+void pdist_weighted_impl(ArrayDescriptor out, OutputType* out_data,
+                         ArrayDescriptor x, const InputType* x_data,
+                         ArrayDescriptor w, const WeightType* w_data,
+                         WeightedDistanceFunc<OutputType, InputType, WeightType> f) {
     if (x.ndim != 2) {
         throw std::invalid_argument("x must be 2-dimensional");
     }
 
-    StridedView2D<T> out_view;
+    StridedView2D<OutputType> out_view;
     out_view.strides = {out.strides[0], 0};
     out_view.shape = {x.shape[0] - 1, x.shape[1]};
     out_view.data = out_data;
 
-    StridedView2D<const T> w_view;
+    StridedView2D<const WeightType> w_view;
     w_view.strides = {0, w.strides[0]};
     w_view.shape = out_view.shape;
     w_view.data = w_data;
 
-    StridedView2D<const T> x_view;
+    StridedView2D<const InputType> x_view;
     x_view.strides = {x.strides[0], x.strides[1]};
     x_view.shape = out_view.shape;
     x_view.data = x_data + x.strides[0];
 
-    StridedView2D<const T> y_view;
+    StridedView2D<const InputType> y_view;
     y_view.strides = {0, x.strides[1]};
     y_view.shape = out_view.shape;
     y_view.data = x_data;
@@ -140,27 +140,27 @@ void pdist_weighted_impl(ArrayDescriptor out, T* out_data,
     }
 }
 
-template <typename T>
-void cdist_impl(ArrayDescriptor out, T* out_data,
-                ArrayDescriptor x, const T* x_data,
-                ArrayDescriptor y, const T* y_data,
-                DistanceFunc<T> f) {
+template <typename OutputType, typename InputType = OutputType>
+void cdist_impl(ArrayDescriptor out, OutputType* out_data,
+                ArrayDescriptor x, const InputType* x_data,
+                ArrayDescriptor y, const InputType* y_data,
+                DistanceFunc<OutputType, InputType> f) {
 
     const auto num_rowsX = x.shape[0];
     const auto num_rowsY = y.shape[0];
     const auto num_cols = x.shape[1];
 
-    StridedView2D<T> out_view;
+    StridedView2D<OutputType> out_view;
     out_view.strides = {out.strides[1], 0};
     out_view.shape = {num_rowsY, num_cols};
     out_view.data = out_data;
 
-    StridedView2D<const T> x_view;
+    StridedView2D<const InputType> x_view;
     x_view.strides = {0, x.strides[1]};
     x_view.shape = {num_rowsY, num_cols};
     x_view.data = x_data;
 
-    StridedView2D<const T> y_view;
+    StridedView2D<const InputType> y_view;
     y_view.strides = {y.strides[0], y.strides[1]};
     y_view.shape = {out_view.shape[0], num_cols};
     y_view.data = y_data;
@@ -173,33 +173,33 @@ void cdist_impl(ArrayDescriptor out, T* out_data,
     }
 }
 
-template <typename T>
-void cdist_weighted_impl(ArrayDescriptor out, T* out_data,
-                         ArrayDescriptor x, const T* x_data,
-                         ArrayDescriptor y, const T* y_data,
-                         ArrayDescriptor w, const T* w_data,
-                         WeightedDistanceFunc<T> f) {
+template <typename OutputType, typename InputType, typename WeightType>
+void cdist_weighted_impl(ArrayDescriptor out, OutputType* out_data,
+                         ArrayDescriptor x, const InputType* x_data,
+                         ArrayDescriptor y, const InputType* y_data,
+                         ArrayDescriptor w, const WeightType* w_data,
+                         WeightedDistanceFunc<OutputType, InputType, WeightType> f) {
 
     const auto num_rowsX = x.shape[0];
     const auto num_rowsY = y.shape[0];
     const auto num_cols = x.shape[1];
 
-    StridedView2D<T> out_view;
+    StridedView2D<OutputType> out_view;
     out_view.strides = {out.strides[1], 0};
     out_view.shape = {num_rowsY, num_cols};
     out_view.data = out_data;
 
-    StridedView2D<const T> x_view;
+    StridedView2D<const InputType> x_view;
     x_view.strides = {0, x.strides[1]};
     x_view.shape = {num_rowsY, num_cols};
     x_view.data = x_data;
 
-    StridedView2D<const T> y_view;
+    StridedView2D<const InputType> y_view;
     y_view.strides = {y.strides[0], y.strides[1]};
     y_view.shape = {num_rowsY, num_cols};
     y_view.data = y_data;
 
-    StridedView2D<const T> w_view;
+    StridedView2D<const WeightType> w_view;
     w_view.strides = {0, w.strides[0]};
     w_view.shape = {num_rowsY, num_cols};
     w_view.data = w_data;
@@ -266,12 +266,12 @@ py::array npy_asarray(const py::handle& obj, int flags = 0) {
     return py::reinterpret_steal<py::array>(arr);
 }
 
-template <typename scalar_t>
+template <typename OutputType, typename InputType = OutputType>
 py::array pdist_unweighted(const py::array& out_obj, const py::array& x_obj,
-                           DistanceFunc<scalar_t> f) {
-    auto x = npy_asarray<scalar_t>(x_obj,
-                                   NPY_ARRAY_ALIGNED | NPY_ARRAY_NOTSWAPPED);
-    auto out = py::cast<py::array_t<scalar_t>>(out_obj);
+                           DistanceFunc<OutputType, InputType> f) {
+    int flags = NPY_ARRAY_ALIGNED | NPY_ARRAY_NOTSWAPPED | NPY_ARRAY_ELEMENTSTRIDES;
+    auto x = npy_asarray<InputType>(x_obj, flags);
+    auto out = py::cast<py::array_t<OutputType>>(out_obj);
     auto out_desc = get_descriptor(out);
     auto out_data = out.mutable_data();
     auto x_desc = get_descriptor(x);
@@ -283,15 +283,15 @@ py::array pdist_unweighted(const py::array& out_obj, const py::array& x_obj,
     return std::move(out);
 }
 
-template <typename scalar_t>
+template <typename OutputType, typename InputType = OutputType, typename WeightType = OutputType>
 py::array pdist_weighted(
         const py::array& out_obj, const py::array& x_obj,
-        const py::array& w_obj, WeightedDistanceFunc<scalar_t> f) {
-    auto x = npy_asarray<scalar_t>(x_obj,
-                                   NPY_ARRAY_ALIGNED | NPY_ARRAY_NOTSWAPPED);
-    auto w = npy_asarray<scalar_t>(w_obj,
-                                   NPY_ARRAY_ALIGNED | NPY_ARRAY_NOTSWAPPED);
-    auto out = py::cast<py::array_t<scalar_t>>(out_obj);
+        const py::array& w_obj,
+        WeightedDistanceFunc<OutputType, InputType, WeightType> f) {
+    int flags = NPY_ARRAY_ALIGNED | NPY_ARRAY_NOTSWAPPED | NPY_ARRAY_ELEMENTSTRIDES;
+    auto x = npy_asarray<InputType>(x_obj, flags);
+    auto w = npy_asarray<WeightType>(w_obj, flags);
+    auto out = py::cast<py::array_t<OutputType>>(out_obj);
     auto out_desc = get_descriptor(out);
     auto out_data = out.mutable_data();
     auto x_desc = get_descriptor(x);
@@ -307,14 +307,13 @@ py::array pdist_weighted(
     return std::move(out);
 }
 
-template <typename scalar_t>
+template <typename OutputType, typename InputType = OutputType>
 py::array cdist_unweighted(const py::array& out_obj, const py::array& x_obj,
-                           const py::array& y_obj, DistanceFunc<scalar_t> f) {
-    auto x = npy_asarray<scalar_t>(x_obj,
-                                 NPY_ARRAY_ALIGNED | NPY_ARRAY_NOTSWAPPED);
-    auto y = npy_asarray<scalar_t>(y_obj,
-                                 NPY_ARRAY_ALIGNED | NPY_ARRAY_NOTSWAPPED);
-    auto out = py::cast<py::array_t<scalar_t>>(out_obj);
+                           const py::array& y_obj, DistanceFunc<OutputType, InputType> f) {
+    int flags = NPY_ARRAY_ALIGNED | NPY_ARRAY_NOTSWAPPED | NPY_ARRAY_ELEMENTSTRIDES;
+    auto x = npy_asarray<InputType>(x_obj, flags);
+    auto y = npy_asarray<InputType>(y_obj, flags);
+    auto out = py::cast<py::array_t<OutputType>>(out_obj);
 
     auto out_desc = get_descriptor(out);
     auto out_data = out.mutable_data();
@@ -329,18 +328,16 @@ py::array cdist_unweighted(const py::array& out_obj, const py::array& x_obj,
     return std::move(out);
 }
 
-template <typename scalar_t>
+template <typename OutputType, typename InputType = OutputType, typename WeightType = OutputType>
 py::array cdist_weighted(
         const py::array& out_obj, const py::array& x_obj,
         const py::array& y_obj, const py::array& w_obj,
-        WeightedDistanceFunc<scalar_t> f) {
-    auto x = npy_asarray<scalar_t>(x_obj,
-                                 NPY_ARRAY_ALIGNED | NPY_ARRAY_NOTSWAPPED);
-    auto y = npy_asarray<scalar_t>(y_obj,
-                                 NPY_ARRAY_ALIGNED | NPY_ARRAY_NOTSWAPPED);
-    auto w = npy_asarray<scalar_t>(w_obj,
-                                 NPY_ARRAY_ALIGNED | NPY_ARRAY_NOTSWAPPED);
-    auto out = py::cast<py::array_t<scalar_t>>(out_obj);
+        WeightedDistanceFunc<OutputType, InputType, WeightType> f) {
+    int flags = NPY_ARRAY_ALIGNED | NPY_ARRAY_NOTSWAPPED | NPY_ARRAY_ELEMENTSTRIDES;
+    auto x = npy_asarray<InputType>(x_obj, flags);
+    auto y = npy_asarray<InputType>(y_obj, flags);
+    auto w = npy_asarray<WeightType>(w_obj, flags);
+    auto out = py::cast<py::array_t<OutputType>>(out_obj);
 
     auto out_desc = get_descriptor(out);
     auto out_data = out.mutable_data();
@@ -401,6 +398,7 @@ py::array prepare_out_argument(const py::object& obj, const py::dtype& dtype,
         throw std::invalid_argument(
             "out array must be aligned, writable and native byte order");
     }
+    // PyArray_ElementStrides() is checked in get_descriptor
     return out;
 }
 
@@ -414,7 +412,7 @@ py::array prepare_single_weight(const py::object& obj, intptr_t len) {
         msg << weight.shape(0) << " vs. " << len << ".";
         throw std::invalid_argument(msg.str());
     }
-    return weight;
+    return weight; // TODO: no type cast on weight?
 }
 
 py::dtype common_type(py::dtype type) {
@@ -492,20 +490,37 @@ py::array pdist(const py::object& out_obj, const py::object& x_obj,
     const intptr_t n = x.shape(0);
     std::array<intptr_t, 1> out_shape{{(n * (n - 1)) / 2}};
     if (w_obj.is_none()) {
+        if constexpr(metric_traits<Func>::domain == MetricDomain::Bool) {
+            if (x.dtype().equal(py::dtype::of<bool>())) {
+                auto out = prepare_out_argument(out_obj, py::dtype::of<double>(), out_shape);
+                pdist_unweighted<double, bool>(out, x, f);
+                return out;
+            }
+        }
         auto dtype = promote_type_real(x.dtype());
         auto out = prepare_out_argument(out_obj, dtype, out_shape);
-        DISPATCH_DTYPE(dtype, [&]{
-            pdist_unweighted<scalar_t>(out, x, f);
-        });
+        DISPATCH_DTYPE(dtype, ([&]{
+            pdist_unweighted<scalar_t, scalar_t>(out, x, f);
+        }));
         return out;
     }
 
     auto w = prepare_single_weight(w_obj, m);
+    if constexpr(metric_traits<Func>::domain == MetricDomain::Bool) {
+        if (x.dtype().equal(py::dtype::of<bool>())) {
+            auto dtype = promote_type_real(w.dtype());
+            auto out = prepare_out_argument(out_obj, dtype, out_shape);
+            DISPATCH_DTYPE(dtype, ([&]{
+                pdist_weighted<scalar_t, bool, scalar_t>(out, x, w, f);
+            }));
+            return out;
+        }
+    }
     auto dtype = promote_type_real(common_type(x.dtype(), w.dtype()));
     auto out = prepare_out_argument(out_obj, dtype, out_shape);
-    DISPATCH_DTYPE(dtype, [&]{
-        pdist_weighted<scalar_t>(out, x, w, f);
-    });
+    DISPATCH_DTYPE(dtype, ([&]{
+        pdist_weighted<scalar_t, scalar_t, scalar_t>(out, x, w, f);
+    }));
     return out;
 }
 
@@ -529,21 +544,41 @@ py::array cdist(const py::object& out_obj, const py::object& x_obj,
 
     std::array<intptr_t, 2> out_shape{{x.shape(0), y.shape(0)}};
     if (w_obj.is_none()) {
+        if constexpr(metric_traits<Func>::domain == MetricDomain::Bool) {
+            if (x.dtype().equal(py::dtype::of<bool>()) &&
+                y.dtype().equal(py::dtype::of<bool>())) {
+                auto out = prepare_out_argument(out_obj, py::dtype::of<double>(), out_shape);
+                cdist_unweighted<double, bool>(out, x, y, f);
+                return out;
+            }
+        }
         auto dtype = promote_type_real(common_type(x.dtype(), y.dtype()));
         auto out = prepare_out_argument(out_obj, dtype, out_shape);
-        DISPATCH_DTYPE(dtype, [&]{
-            cdist_unweighted<scalar_t>(out, x, y, f);
-        });
+        DISPATCH_DTYPE(dtype, ([&]{
+            cdist_unweighted<scalar_t, scalar_t>(out, x, y, f);
+        }));
         return out;
     }
 
+    if constexpr(metric_traits<Func>::domain == MetricDomain::Bool) {
+        if (x.dtype().equal(py::dtype::of<bool>()) &&
+            y.dtype().equal(py::dtype::of<bool>())) {
+            auto w = prepare_single_weight(w_obj, m);
+            auto dtype = promote_type_real(w.dtype());
+            auto out = prepare_out_argument(out_obj, dtype, out_shape);
+            DISPATCH_DTYPE(dtype, ([&]{
+                cdist_weighted<scalar_t, bool, scalar_t>(out, x, y, w, f);
+            }));
+            return out;
+        }
+    }
     auto w = prepare_single_weight(w_obj, m);
     auto dtype = promote_type_real(
         common_type(x.dtype(), y.dtype(), w.dtype()));
     auto out = prepare_out_argument(out_obj, dtype, out_shape);
-    DISPATCH_DTYPE(dtype, [&]{
-        cdist_weighted<scalar_t>(out, x, y, w, f);
-    });
+    DISPATCH_DTYPE(dtype, ([&]{
+        cdist_weighted<scalar_t, scalar_t, scalar_t>(out, x, y, w, f);
+    }));
     return out;
 }
 
@@ -552,6 +587,7 @@ PYBIND11_MODULE(_distance_pybind, m) {
         throw py::error_already_set();
     }
     using namespace pybind11::literals;
+
     m.def("pdist_canberra",
           [](py::object x, py::object w, py::object out) {
               return pdist(out, x, w, CanberraDistance{});

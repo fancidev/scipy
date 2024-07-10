@@ -47,25 +47,27 @@ struct ForceUnroll<1> {
 };
 
 template <int ilp_factor=4,
-          typename T,
+          typename OutputType,
+          typename InputType,
           typename TransformFunc,
           typename ProjectFunc = Identity,
           typename ReduceFunc = Plus>
-void transform_reduce_2d_(
-    StridedView2D<T> out, StridedView2D<const T> x, StridedView2D<const T> y,
-    const TransformFunc& map,
-    const ProjectFunc& project = Identity{},
-    const ReduceFunc& reduce = Plus{}) {
+void transform_reduce_2d_(StridedView2D<OutputType> out,
+                          StridedView2D<const InputType> x,
+                          StridedView2D<const InputType> y,
+                          const TransformFunc& map,
+                          const ProjectFunc& project = Identity{},
+                          const ReduceFunc& reduce = Plus{}) {
     // Result type of calling map
     using AccumulateType = typename std::decay<decltype(
-        map(std::declval<T>(), std::declval<T>()))>::type;
+        map(std::declval<InputType>(), std::declval<InputType>()))>::type;
     intptr_t xs = x.strides[1], ys = y.strides[1];
 
     intptr_t i = 0;
     if (xs == 1 && ys == 1) {
         for (; i + (ilp_factor - 1) < x.shape[0]; i += ilp_factor) {
-            const T* x_rows[ilp_factor];
-            const T* y_rows[ilp_factor];
+            const InputType* x_rows[ilp_factor];
+            const InputType* y_rows[ilp_factor];
             ForceUnroll<ilp_factor>{}([&](int k) {
                 x_rows[k] = &x(i + k, 0);
                 y_rows[k] = &y(i + k, 0);
@@ -85,8 +87,8 @@ void transform_reduce_2d_(
         }
     } else {
         for (; i + (ilp_factor - 1) < x.shape[0]; i += ilp_factor) {
-            const T* x_rows[ilp_factor];
-            const T* y_rows[ilp_factor];
+            const InputType* x_rows[ilp_factor];
+            const InputType* y_rows[ilp_factor];
             ForceUnroll<ilp_factor>{}([&](int k) {
                 x_rows[k] = &x(i + k, 0);
                 y_rows[k] = &y(i + k, 0);
@@ -108,8 +110,8 @@ void transform_reduce_2d_(
         }
     }
     for (; i < x.shape[0]; ++i) {
-        const T* x_row = &x(i, 0);
-        const T* y_row = &y(i, 0);
+        const InputType* x_row = &x(i, 0);
+        const InputType* y_row = &y(i, 0);
         AccumulateType dist = {};
         for (intptr_t j = 0; j < x.shape[1]; ++j) {
             auto val = map(x_row[j * xs], y_row[j * ys]);
@@ -119,25 +121,30 @@ void transform_reduce_2d_(
     }
 }
 
-template <int ilp_factor=2, typename T,
+template <int ilp_factor=2,
+          typename OutputType,
+          typename InputType,
+          typename WeightType,
           typename TransformFunc,
           typename ProjectFunc = Identity,
           typename ReduceFunc = Plus>
-void transform_reduce_2d_(
-    StridedView2D<T> out, StridedView2D<const T> x, StridedView2D<const T> y,
-    StridedView2D<const T> w, const TransformFunc& map,
-    const ProjectFunc& project = Identity{},
-    const ReduceFunc& reduce = Plus{}) {
+void transform_reduce_2d_(StridedView2D<OutputType> out,
+                          StridedView2D<const InputType> x,
+                          StridedView2D<const InputType> y,
+                          StridedView2D<const WeightType> w,
+                          const TransformFunc& map,
+                          const ProjectFunc& project = Identity{},
+                          const ReduceFunc& reduce = Plus{}) {
     intptr_t i = 0;
     intptr_t xs = x.strides[1], ys = y.strides[1], ws = w.strides[1];
     // Result type of calling map
     using AccumulateType = typename std::decay<decltype(
-        map(std::declval<T>(), std::declval<T>(), std::declval<T>()))>::type;
+        map(std::declval<InputType>(), std::declval<InputType>(), std::declval<WeightType>()))>::type;
 
     for (; i + (ilp_factor - 1) < x.shape[0]; i += ilp_factor) {
-        const T* x_rows[ilp_factor];
-        const T* y_rows[ilp_factor];
-        const T* w_rows[ilp_factor];
+        const InputType* x_rows[ilp_factor];
+        const InputType* y_rows[ilp_factor];
+        const WeightType* w_rows[ilp_factor];
         ForceUnroll<ilp_factor>{}([&](int k) {
             x_rows[k] = &x(i + k, 0);
             y_rows[k] = &y(i + k, 0);
@@ -157,9 +164,9 @@ void transform_reduce_2d_(
         });
     }
     for (; i < x.shape[0]; ++i) {
-        const T* x_row = &x(i, 0);
-        const T* y_row = &y(i, 0);
-        const T* w_row = &w(i, 0);
+        const InputType* x_row = &x(i, 0);
+        const InputType* y_row = &y(i, 0);
+        const WeightType* w_row = &w(i, 0);
         AccumulateType dist = {};
         for (intptr_t j = 0; j < x.shape[1]; ++j) {
             auto val = map(x_row[j * xs], y_row[j * ys], w_row[j * ws]);
@@ -168,6 +175,17 @@ void transform_reduce_2d_(
         out(i, 0) = project(dist);
     }
 }
+
+enum class MetricDomain : char {
+    Real = 'r',
+    Bool = 'b',
+    Edit = 'e',
+};
+
+template <class T>
+struct metric_traits {
+    static constexpr MetricDomain domain = MetricDomain::Real;
+};
 
 struct MinkowskiDistance {
     double p_;
@@ -389,6 +407,96 @@ struct HammingDistance {
             acc.total = a.total + b.total;
             return acc;
         });
+    }
+};
+
+// Generic implementation of metric defined on bool or fuzzy bool vectors.
+template <typename Formula>
+struct BoolDistance {
+
+    template <typename T>
+    static T fuzzy_and(T x, T y) { return x * y; }
+
+    template <typename T>
+    static T fuzzy_xor(T x, T y) { return x * (T(1) - y) + y * (T(1) - x); }
+
+    template <typename T>
+    static T fuzzy_nor(T x, T y) { return (T(1) - x) * (T(1) - y); }
+
+    static inline bool fuzzy_and(bool x, bool y) { return x & y; }
+    static inline bool fuzzy_xor(bool x, bool y) { return x ^ y; }
+    static inline bool fuzzy_nor(bool x, bool y) { return (!x) & (!y); }
+
+    template <typename T>
+    struct Acc {
+        Acc(): s_and(0), s_xor(0), s_nor(0) {}
+        T s_and, s_xor, s_nor;
+    };
+
+    template <typename OutputType, typename InputType>
+    void operator()(StridedView2D<OutputType> out, StridedView2D<const InputType> x, StridedView2D<const InputType> y) const {
+        using output_type = OutputType;
+        using working_type = typename std::conditional<std::is_same<InputType, bool>::value,
+                                                       intptr_t, OutputType>::type;
+        transform_reduce_2d_<2>(out, x, y, [](InputType x, InputType y) INLINE_LAMBDA {
+            Acc<working_type> acc;
+            acc.s_and = fuzzy_and(x, y);
+            acc.s_xor = fuzzy_xor(x, y);
+            acc.s_nor = fuzzy_nor(x, y);
+            return acc;
+        },
+        [](const Acc<working_type>& acc) INLINE_LAMBDA {
+            return Formula::formula(
+                static_cast<output_type>(acc.s_and),
+                static_cast<output_type>(acc.s_xor),
+                static_cast<output_type>(acc.s_nor));
+        },
+        [](const Acc<working_type>& a, const Acc<working_type>& b) INLINE_LAMBDA {
+            Acc<working_type> acc;
+            acc.s_and = a.s_and + b.s_and;
+            acc.s_xor = a.s_xor + b.s_xor;
+            acc.s_nor = a.s_nor + b.s_nor;
+            return acc;
+        });
+    }
+
+    template <typename OutputType, typename InputType, typename WeightType>
+    void operator()(StridedView2D<OutputType> out,
+                    StridedView2D<const InputType> x,
+                    StridedView2D<const InputType> y,
+                    StridedView2D<const WeightType> w) const {
+        using working_type = OutputType;
+
+        transform_reduce_2d_(out, x, y, w, [](InputType x, InputType y, WeightType w) INLINE_LAMBDA {
+            Acc<working_type> acc;
+            acc.s_and = w * fuzzy_and(x, y);
+            acc.s_xor = w * fuzzy_xor(x, y);
+            acc.s_nor = w * fuzzy_nor(x, y);
+            return acc;
+        },
+        [](const Acc<working_type>& acc) INLINE_LAMBDA {
+            return Formula::formula(acc.s_and, acc.s_xor, acc.s_nor);
+        },
+        [](const Acc<working_type>& a, const Acc<working_type>& b) INLINE_LAMBDA {
+            Acc<working_type> acc;
+            acc.s_and = a.s_and + b.s_and;
+            acc.s_xor = a.s_xor + b.s_xor;
+            acc.s_nor = a.s_nor + b.s_nor;
+            return acc;
+        });
+    }
+};
+
+template <typename Formula>
+struct metric_traits<BoolDistance<Formula>> {
+    static constexpr MetricDomain domain = MetricDomain::Bool;
+};
+
+struct DiceFormula {
+    template <typename OutputType, typename WorkingType>
+    static inline OutputType
+    formula(WorkingType s_and, WorkingType s_xor, WorkingType s_nor) {
+        return s_xor / (2*s_and + s_xor);
     }
 };
 
