@@ -363,7 +363,8 @@ py::array_t<T> npy_asarray(const py::handle& obj, int flags = 0) {
 // Cast python object to NumPy array of given dtype.
 // flags can be any NumPy array constructor flags.
 py::array npy_asarray(const py::handle& obj, py::dtype dtype, int flags = 0) {
-    PyObject* arr = PyArray_FromAny(obj.ptr(), dtype.release().ptr(), 0, 0, flags, nullptr);
+    PyObject* arr = PyArray_FromAny(obj.ptr(),
+        reinterpret_cast<PyArray_Descr*>(dtype.release().ptr()), 0, 0, flags, nullptr);
     if (arr == nullptr) {
         throw py::error_already_set();
     }
@@ -521,7 +522,7 @@ py::array prepare_out_argument(const py::object& obj, const py::dtype& dtype,
     }
 
     py::array out = py::cast<py::array>(obj);
-    validate_out_argument(out);
+    validate_out_argument(out, dtype, out_shape);
     return out;
 }
 
@@ -704,7 +705,7 @@ py::dtype get_native_floating_dtype(const py::dtype& dtype) {
     case 'u': // unsigned integer
         return py::dtype(NPY_DOUBLE);
     case 'f': { // floating
-        int typenum = dtype.typenum();
+        int typenum = dtype.num();
         if (typenum == NPY_FLOAT || typenum == NPY_DOUBLE || typenum == NPY_LONGDOUBLE) {
             return dtype;
         }
@@ -765,7 +766,7 @@ std::pair<py::array, py::array> prepare_xy(
         input_dtype = common_type(get_native_floating_dtype(x.dtype()),
                                   get_native_floating_dtype(y.dtype()));
         if (least_dtype) {
-            input_dtype = common_type(input_dtype, get_floating_dtype(least_dtype));
+            input_dtype = common_type(input_dtype, get_native_floating_dtype(least_dtype));
         }
         break;
     case MetricClass::Bool:
@@ -779,167 +780,151 @@ std::pair<py::array, py::array> prepare_xy(
     }
 
     // Convert x and y to the desired dtype and layout.
-    int flags = NPY_ARRAY_ALIGNED | NPY_ARRAY_NOTSWAPPED | NPY_ARRAY_ELEMENTSTRIDE;
+    int flags = NPY_ARRAY_ALIGNED | NPY_ARRAY_NOTSWAPPED | NPY_ARRAY_ELEMENTSTRIDES;
     x = npy_asarray(x, input_dtype, flags);
     y = x_obj.is(y_obj) ? x : npy_asarray(y, input_dtype, flags);
     return {x, y};
-)
-
-// Prepare a weight scalar, vector, or matrix.
-//
-// Parameters
-// ----------
-//   w                Input weight.  Must not be None.
-//   weight_shape     Desired weight shape
-//   n                Number of columns in x and y; ignored for scalar weight
-//   least_dtype_obj  If not None, the dtype of the returned weight object
-//                    is at least as wide as the native floating dtype of
-//                    least_dtype.
-//   promote_shape    If True, the input or vector weight is allowed and a diagonal
-//                  weight matrix is constructed from w.
-//
-// Return value
-// ------------
-// An n-by-n weight matrix converted from w, with dtype equal to the *native
-// floating dtype* of w or that of least_dtype (if supplied), whichever is
-// wider.
-
-// prepare_w
-py::array prepare_weight_matrix(py::object w_obj,
-                                int n,
-                                py::object least_dtype_obj = py::none(),
-                                bool promote_shape = false) {
-
-    py::array w = npy_asarray(w_obj);
-
-    const int ndim = w.ndim();
-    switch (ndim) {
-    case 0:
-        if (!promote_shape) {
-            throw std::invalid_argument("weight must be a matrix, not scalar");
-        }
-        throw std::invalid_argument("scalar->matrix transform is not implemented");
-        break;
-    case 1:
-        if (!promote_shape) {
-            throw std::invalid_argument("weight must be a matrix, not vector");
-        }
-        if (w.shape(0) != n) {
-            throw std::invalid_argument("weight vector must have the same length "
-                                        "as the number of columns in X");
-        }
-        throw std::invalid_argument("vector->matrix transform is not implemented");
-        break;
-    case 2:
-        if (!(w.shape(0) == n && w.shape(1) == n)) {
-            throw std::invalid_argument("weight matrix must be square and have "
-                                        "the same number of columns as X");
-        }
-        break;
-    default:
-        throw std::invalid_argument(promote_shape ?
-            "weight scalar, vector, or matrix expected" :
-            "weight matrix expected");
-        break;
-    }
-
-    // Determine the weight dtype, which is the wider native floating dtype
-    // of itself and that of least_dtype if supplied.
-    py::dtype weight_dtype = get_native_floating_dtype(w.dtype());
-    if (!least_dtype_obj.is_none()) {
-        py::dtype least_dtype = least_dtype_obj;
-        weight_dtype = common_type(weight_dtype,
-                                   get_native_floating_dtype(least_dtype));
-    }
-
-    // Convert weight matrix to the desired dtype and layout, and
-    // make sure it is contiguous.
-    int flags = NPY_ARRAY_ALIGNED | NPY_ARRAY_NOTSWAPPED |
-                NPY_ARRAY_ELEMENTSTRIDE | NPY_ARRAY_C_CONTIGUOUS;
-    return npy_asarray(w, weight_dtype, flags);
 }
 
-// x, y, and w (if supplied) *must* have already been prepared
-py::array prepare_output_for_real_metric(
-    py::object x_obj, py::object y_obj, py::object w_obj, char return_type, py::object out_obj)
-{
-    py::array x = x_obj;
-    py::array y = y_obj;
-    py::array w = w_obj.is_none() ? py::object{} : w_obj;
-
-    if (!(x.ndim() == 2 && y.ndim() == 2)) {
-        throw std::invalid_argument("x and y must be 2-D arrays");
-    }
-
-    // Compute output shape.
-    const intptr_t p = x.shape(0), q = y.shape(0), n = y.shape(1);
-    if (x.shape(1) != n) {
-        throw std::invalid_argument("x and y must have the same number of columns");
-    }
-    py::tuple out_shape;
-    if (return_type == RETURN_FULL) {
-        out_shape = py::make_tuple(p, q);
-    } else if (return_type == RETURN_UPPER) {
-        if (p != q) {
-            throw std::invalid_argument("x and y must have the same number of rows");
-        }
-        out_shape = py::make_tuple(p * (p - 1) / 2);
-    } else {
-        throw std::invalid_argument("invalid return_type");
-    }
-
-    // Compute output dtype.
-    py::dtype out_dtype = common_type(get_native_floating_type(x.dtype()),
-                                      get_native_floating_type(y.dtype()));
-    if (w) {
-        out_dtype = common_type(out_dtype, get_native_floating_type(w.dtype()));
-    }
-
-    // Create output buffer if none is supplied.
-    if (out_obj.is_none()) {
-        return py::array(dtype, out_shape);
-    }
-
-    // Now verify that the supplied `out` argument precisely satisfies our
-    // requirement.
-    if (!py::isinstance<py::array>(out_obj)) {
-        throw py::type_error("out argument must be an ndarray");
-    }
-    py::array out = out_obj;
-
-    if (!out_shape.equal(out.shape())) {
-        throw std::invalid_argument("out array has incorrect shape");
-    }
-    if (out.dtype().not_equal(dtype)) {
-        throw std::invalid_argument("out array has wrong dtype, expected " +
-                                    std::string(py::str(dtype)));
-    }
-
-    PyArrayObject *pao = reinterpret_cast<PyArrayObject*>(out.ptr());
-    if (!PyArray_ISCONTIGUOUS(pao)) {
-        throw std::invalid_argument("out array must be C-contiguous");
-    }
-    if (!PyArray_ISBEHAVED(pao)) {
-        throw std::invalid_argument(
-            "out array must be aligned, writable and native byte order");
-    }
-    return out;
-}
-
-//std::tuple<py::array, py::array, py::array>
-//prepare_xyw(py::object x_obj, py::object y_obj, py::object w_obj,
-//            char return_type, char metric_class, char weight_shape,
-//            bool promote_weight_shape) {
+//// Prepare a weight scalar, vector, or matrix.
+////
+//// Parameters
+//// ----------
+////   w                Input weight.  Must not be None.
+////   weight_shape     Desired weight shape
+////   n                Number of columns in x and y; ignored for scalar weight
+////   least_dtype_obj  If not None, the dtype of the returned weight object
+////                    is at least as wide as the native floating dtype of
+////                    least_dtype.
+////   promote_shape    If True, the input or vector weight is allowed and a diagonal
+////                  weight matrix is constructed from w.
+////
+//// Return value
+//// ------------
+//// An n-by-n weight matrix converted from w, with dtype equal to the *native
+//// floating dtype* of w or that of least_dtype (if supplied), whichever is
+//// wider.
 //
-//    py::array x = npy_asarray(x_obj);
-//    py::array y = npy_asarray(y_obj);
+//// prepare_w
+//py::array prepare_weight_matrix(py::object w_obj,
+//                                int n,
+//                                py::object least_dtype_obj = py::none(),
+//                                bool promote_shape = false) {
+//
 //    py::array w = npy_asarray(w_obj);
 //
-//    auto xy = prepare_input(x, y, return_type, w.dtype);
-//    x = xy.first;
-//    y = xy.second;
-//    w = prepare_weight(w, weight_shape, x.shape[1], x.dtype, promote_weight_shape);
-//    return {x, y, w};
+//    const int ndim = w.ndim();
+//    switch (ndim) {
+//    case 0:
+//        if (!promote_shape) {
+//            throw std::invalid_argument("weight must be a matrix, not scalar");
+//        }
+//        throw std::invalid_argument("scalar->matrix transform is not implemented");
+//        break;
+//    case 1:
+//        if (!promote_shape) {
+//            throw std::invalid_argument("weight must be a matrix, not vector");
+//        }
+//        if (w.shape(0) != n) {
+//            throw std::invalid_argument("weight vector must have the same length "
+//                                        "as the number of columns in X");
+//        }
+//        throw std::invalid_argument("vector->matrix transform is not implemented");
+//        break;
+//    case 2:
+//        if (!(w.shape(0) == n && w.shape(1) == n)) {
+//            throw std::invalid_argument("weight matrix must be square and have "
+//                                        "the same number of columns as X");
+//        }
+//        break;
+//    default:
+//        throw std::invalid_argument(promote_shape ?
+//            "weight scalar, vector, or matrix expected" :
+//            "weight matrix expected");
+//        break;
+//    }
+//
+//    // Determine the weight dtype, which is the wider native floating dtype
+//    // of itself and that of least_dtype if supplied.
+//    py::dtype weight_dtype = get_native_floating_dtype(w.dtype());
+//    if (!least_dtype_obj.is_none()) {
+//        py::dtype least_dtype = least_dtype_obj;
+//        weight_dtype = common_type(weight_dtype,
+//                                   get_native_floating_dtype(least_dtype));
+//    }
+//
+//    // Convert weight matrix to the desired dtype and layout, and
+//    // make sure it is contiguous.
+//    int flags = NPY_ARRAY_ALIGNED | NPY_ARRAY_NOTSWAPPED |
+//                NPY_ARRAY_ELEMENTSTRIDE | NPY_ARRAY_C_CONTIGUOUS;
+//    return npy_asarray(w, weight_dtype, flags);
+//}
+
+//// x, y, and w (if supplied) *must* have already been prepared
+//py::array prepare_output_for_real_metric(
+//    py::object x_obj, py::object y_obj, py::object w_obj, char return_type, py::object out_obj)
+//{
+//    py::array x = x_obj;
+//    py::array y = y_obj;
+//    py::array w = w_obj.is_none() ? py::object{} : w_obj;
+//
+//    if (!(x.ndim() == 2 && y.ndim() == 2)) {
+//        throw std::invalid_argument("x and y must be 2-D arrays");
+//    }
+//
+//    // Compute output shape.
+//    const intptr_t p = x.shape(0), q = y.shape(0), n = y.shape(1);
+//    if (x.shape(1) != n) {
+//        throw std::invalid_argument("x and y must have the same number of columns");
+//    }
+//    py::tuple out_shape;
+//    if (return_type == RETURN_FULL) {
+//        out_shape = py::make_tuple(p, q);
+//    } else if (return_type == RETURN_UPPER) {
+//        if (p != q) {
+//            throw std::invalid_argument("x and y must have the same number of rows");
+//        }
+//        out_shape = py::make_tuple(p * (p - 1) / 2);
+//    } else {
+//        throw std::invalid_argument("invalid return_type");
+//    }
+//
+//    // Compute output dtype.
+//    py::dtype out_dtype = common_type(get_native_floating_type(x.dtype()),
+//                                      get_native_floating_type(y.dtype()));
+//    if (w) {
+//        out_dtype = common_type(out_dtype, get_native_floating_type(w.dtype()));
+//    }
+//
+//    // Create output buffer if none is supplied.
+//    if (out_obj.is_none()) {
+//        return py::array(dtype, out_shape);
+//    }
+//
+//    // Now verify that the supplied `out` argument precisely satisfies our
+//    // requirement.
+//    if (!py::isinstance<py::array>(out_obj)) {
+//        throw py::type_error("out argument must be an ndarray");
+//    }
+//    py::array out = out_obj;
+//
+//    if (!out_shape.equal(out.shape())) {
+//        throw std::invalid_argument("out array has incorrect shape");
+//    }
+//    if (out.dtype().not_equal(dtype)) {
+//        throw std::invalid_argument("out array has wrong dtype, expected " +
+//                                    std::string(py::str(dtype)));
+//    }
+//
+//    PyArrayObject *pao = reinterpret_cast<PyArrayObject*>(out.ptr());
+//    if (!PyArray_ISCONTIGUOUS(pao)) {
+//        throw std::invalid_argument("out array must be C-contiguous");
+//    }
+//    if (!PyArray_ISBEHAVED(pao)) {
+//        throw std::invalid_argument(
+//            "out array must be aligned, writable and native byte order");
+//    }
+//    return out;
 //}
 
 //StridedView2D<void> get_strided_view(const py::array &arr) {
@@ -952,17 +937,14 @@ py::array prepare_output_for_real_metric(
 //    return view;
 //}
 
-void validate_compute_distance_inputs(
-    const py::array &out,
+// Check that x, y are well prepared to be used to compute distances.
+
+void validate_prepared_xy(
     const py::array &x,
     const py::array &y,
     JoinMode join_mode,
-    int expected_input_type,
-    const py::dtype &expected_out_dtype,
-    int expected_output_typenum,
-    ) {
+    const py::dtype &expected_dtype) {
 
-    // Validate arguments to prevent memory corruption.
     if (!(x.ndim() == 2 && y.ndim() == 2 && x.shape(1) == y.shape(1))) {
         throw std::invalid_argument("x, y has unexpected shape");
     }
@@ -970,73 +952,92 @@ void validate_compute_distance_inputs(
         throw std::invalid_argument("x, y has unexpected shape");
     }
 
-    using input_type = InputType;
-    using span_type = std::span<const input_type>; // TODO: use our own span
-    using output_type = std::invoke_result_t<Distance, span_type, span_type>;
-
-    // Make sure out is C-contiguous and matches output_type
-    // TODO: factor below into separate function
-    std::vector<intptr_t> out_shape;
-    switch (JoinMode) {
-    case JoinMode::Cross:
-        out_shape.push_back(...);
-        break;
-    case JoinMode::
+    if (!(x.dtype().equal(expected_dtype) && y.dtype().equal(expected_dtype))) {
+        throw std::invalid_argument("x, y has unexpected dtype");
     }
-    validate_out_argument(out, expected_out_dtype, out_shape);
+
+    // PyArray_ElementStrides() is not exported, but get_descriptor()
+    // performs that check.
 }
 
+template <class T>
+struct metric_traits {};
+
+template <>
+struct metric_traits<EuclideanDistance2> {
+    static constexpr MetricClass metric_class = MetricClass::Real;
+#if SPECIALIZE_FLOAT32
+    using supported_value_types = std::tuple<float, double, long double>;
+#else
+    using supported_value_types = std::tuple<double, long double>;
+#endif
+};
+
+template <class T, class U>
+struct is_type_in {};
+
+template <class T>
+struct is_type_in<T, std::tuple<>> : std::false_type {};
+
+template <class T,  class U, class... Rest>
+struct is_type_in<T, std::tuple<U, Rest...>> : is_type_in<T, std::tuple<Rest...>> {};
+
+template <class T,  class... Rest>
+struct is_type_in<T, std::tuple<T, Rest...>> : std::true_type {};
+
+
 // Compute the given metric between rows of 2D arrays x and y using the given
-// join mode, and store the result into out.  The dtype of the input arrays
-// are expected to be InputValueType.
+// join mode, and store the result into out.  Elements of the input arrays
+// must be of type InputValueType.
 template <typename InputValueType, typename Distance>
-void compute_distance_t(const py::array &out,
-                        const py::array_t &x,
-                        const py::array_t &y,
-                        JoinMode join_mode,
-                        Distance &&distance) {
+py::array compute_distance_t(const py::object &out_obj,
+                             const py::array &x,
+                             const py::array &y,
+                             JoinMode join_mode,
+                             Distance &&distance) {
 
-    // Validate arguments to prevent memory corruption.
-    // TODO: split common code into separate function to reduce template size.
-    if (!(x.ndim() == 2 && y.ndim() == 2 && x.shape(1) == y.shape(1))) {
-        throw std::invalid_argument("x, y has unexpected shape");
-    }
-    if (!(join_type == JOIN_FULL || x.shape(0) == y.shape(0))) {
-        throw std::invalid_argument("x, y has unexpected shape");
-    }
+    static_assert(is_type_in<
+        InputValueType, typename metric_traits<Distance>::supported_value_types>::value,
+        "");
 
-    using input_type = InputType;
-    using span_type = std::span<const input_type>; // TODO: use our own span
+    using input_type = InputValueType;
+    using span_type = SimpleSpan<const input_type>;
     using output_type = std::invoke_result_t<Distance, span_type, span_type>;
 
-    // Make sure out is C-contiguous and matches output_type
-    // TODO: factor below into separate function
-    if (out.dtype().typenum() != py::dtype::of<output_type>().typenum()) {
-        throw std::invalid_argument("out has unexpected dtype");
-    }
-    if (!PyArray_ISCONTIGUOUS(out.ptr())) {
-        throw std::invalid_argument("out must be C-contiguous");
-    }
-    if (!PyArray_ISBEHAVED(out.ptr())) {
-        throw std::invalid_argument(
-            "out array must be aligned, writable and native byte order");
-    }
-    out_shape = ...;
-    if (!out.shape().equal(out_shape)) {
-        // ...
+    validate_prepared_xy(x, y, join_mode, py::dtype::of<InputValueType>());
+
+    using index_t = npy_intp;
+
+    const index_t p = x.shape(0);
+    const index_t q = y.shape(0);
+    const index_t n = x.shape(1);
+
+    std::vector<index_t> out_shape;
+    switch (join_mode) {
+    case JoinMode::Cross:
+        out_shape.push_back(p);
+        out_shape.push_back(q);
+        break;
+    case JoinMode::Upper:
+        // assert p == q
+        out_shape.push_back(p * (p - 1) / 2);
+        break;
+    case JoinMode::Inner:
+        out_shape.push_back(std::min(p, q));
+        break;
+    default:
+        throw std::invalid_argument("invalid join_mode");
     }
 
-    const size_t p = x.shape(0);
-    const size_t q = y.shape(0);
-    const size_t n = x.shape(1);
+    py::array out = prepare_out_argument(out_obj, py::dtype::of<output_type>(), out_shape);
 
-    const input_type * const x_data = x.data();
-    const input_type * const y_data = y.data();
+    const input_type * const x_data = static_cast<const input_type *>(x.data());
+    const input_type * const y_data = static_cast<const input_type *>(y.data());
 
-    const ssize_t x_stride_0 = x.stride(0);
-    const ssize_t x_stride_1 = x.stride(1);
-    const ssize_t y_stride_0 = y.stride(0);
-    const ssize_t y_stride_1 = y.stride(1);
+    const index_t x_stride_0 = x.strides(0);
+    const index_t x_stride_1 = x.strides(1);
+    const index_t y_stride_0 = y.strides(0);
+    const index_t y_stride_1 = y.strides(1);
 
     output_type *out_data = static_cast<output_type*>(out.mutable_data());
 
@@ -1050,21 +1051,22 @@ void compute_distance_t(const py::array &out,
         // for strided input.
         const bool x_contiguous = (x_stride_1 == 1);
         const bool y_contiguous = (y_stride_1 == 1);
-        std::vector<InputType> x_buffer{x_contiguous ? 0 : n};
-        std::vector<InputType> y_buffer{y_contiguous ? 0 : n};
+        std::vector<input_type> x_buffer(x_contiguous ? 0 : n);
+        std::vector<input_type> y_buffer(y_contiguous ? 0 : n);
 
         const input_type *x_row = x_data;
-        for (ssize_t i = 0; i < p; ++i) {
+        for (index_t i = 0; i < p; ++i) {
             if (!x_contiguous) /* unlikely */ {
-                for (size_t k = 0; k < n; ++k) {
+                for (index_t k = 0; k < n; ++k) {
                     x_buffer[k] = x_row[k * x_stride_1];
                 }
             }
-            std::span<const input_type> x_span{x_contiguous ? x_row : x_buffer.data(), n};
+            span_type x_span{x_contiguous ? x_row : x_buffer.data(),
+                             static_cast<typename span_type::size_type>(n)};
 
-            const index_t j_first = (join_type == JOIN_OUTER) ? 0 :
-                                    (join_type == JOIN_INNER) ? i : (i + 1);
-            const index_t j_last = (join_type == JOIN_INNER) ? (i + 1) : q;
+            const index_t j_first = (join_mode == JoinMode::Cross) ? 0 :
+                                    (join_mode == JoinMode::Inner) ? i : (i + 1);
+            const index_t j_last = (join_mode == JoinMode::Inner) ? (i + 1) : q;
 
             const input_type *y_row = y_data;
             for (index_t j = j_first; j < j_last; ++j) {
@@ -1073,146 +1075,150 @@ void compute_distance_t(const py::array &out,
                         y_buffer[k] = y_row[k * y_stride_1];
                     }
                 }
-                std::span<const input_type> y_span{y_contiguous ? y_row : y_buffer.data(), n};
+                span_type y_span{y_contiguous ? y_row : y_buffer.data(),
+                                 static_cast<typename span_type::size_type>(n)};
                 output_type d = distance(x_span, y_span);
-                *out_data++ = d;
+                *out_data++ = d; // out MUST be C-Contiguous
                 y_row += y_stride_0;
             }
             x_row += x_stride_0;
         }
     }
-
-    // Postcondition(out_data == out.data() + out.shape().size())
+    return out;
 }
 
 // Compute the given metric between rows of 2D arrays x and y using the given
 // join mode, and store the result into out.  The dtype of x and y must match
 // and must be equal to one of SupportedInputValueTypes.
-template <typename SupportedInputValueTypes, typename Distance>
-void compute_distance(const py::array &out,
-                      const py::array &x, const py::array &y,
-                      JoinMode join_mode, Distance &&distance) {
+template <typename Distance>
+py::array compute_distance(const py::object &out_obj,
+                           const py::object &x_obj,
+                           const py::object &y_obj,
+                           JoinMode join_mode,
+                           Distance &&distance) {
 
-    py::dtype input_dtype = x.dtype();
-    if (!input_dtype.equal(y.dtype())) {
-        throw std::invalid_argument("x and y must have the same dtype");
-    }
+    constexpr MetricClass metric_class = metric_traits<Distance>::metric_class;
+    using supported_value_types = typename metric_traits<Distance>::supported_value_types;
 
-    // Type switches are enclosed in `if constexpr(...)` to avoid unused
-    // template instantiations.
-    if constexpr(is_type_in<bool, SupportedInputValueTypes>::value) {
-        if (input_dtype.equal(py::dtype::of<bool>()) {
-            compute_distance_t<bool>(out, x, y, join_mode, std::forward(distance));
-            return;
-        }
-    }
-    if constexpr(is_type_in<float, SupportedInputValueTypes>::value) {
-        if (input_dtype.equal(py::dtype::of<float>()) {
-            compute_distance_t<float>(out, x, y, join_mode, std::forward(distance));
-            return;
-        }
-    }
-    if constexpr(is_type_in<double, SupportedInputValueTypes>::value) {
-        if (input_dtype.equal(py::dtype::of<double>()) {
-            compute_distance_t<double>(out, x, y, join_mode, std::forward(distance));
-            return;
-        }
-    }
-    if constexpr(is_type_in<long double, SupportedInputValueTypes>::value) {
-        if (input_dtype.equal(py::dtype::of<long double>()) {
-            compute_distance_t<long double>(out, x, y, join_mode, std::forward(distance));
-            return;
-        }
-    }
-    throw std::invalid_argument("unexpected input dtype");
-}
-
-// Compute the given metric between rows of 2D arrays x and y using the given
-// join mode, and store the result into out.  The dtype of x and y must match
-// and must be equal to one of SupportedInputValueTypes.
-template <MetricClass metric_class, class Distance, class CtorArgs...>
-void compute_weighted_distance(const py::object &out_obj,
-                               const py::object &x_obj, const py::array &y_obj,
-                               JoinMode join_mode, const py::object &w_obj,
-                               WeightShape weight_shape,
-                               CtorArgs &&ctor_args...) {
-
-    py::array w = npy_asarray(w_obj);
-    auto xy = prepare_xy(x_obj, y_obj, join_mode, w.dtype(), metric_class);
+    auto xy = prepare_xy(x_obj, y_obj, join_mode, py::none(), metric_class);
     py::array x = xy.first;
     py::array y = xy.second;
-
-    if (weight_shape == WeightShape::Matrix) {
-        w = prepare_weight_matrix(...);
-    } else {
-        throw std::invalid_argument("unsupported weight_shape");
-    }
-
-    if constexpr(metric_class == MetricClass::Real) {
-        py::dtype = w.dtype();
-        if (!(x.dtype().equal(dtype) && y.dtype().equal(dtype))) {
-            throw std::invalid_argument("x, y, w must have same dtype for real metric");
-        }
-#if SPECIALIZE_FLOAT32
-        if (dtype.equal(py::dtype::of<float>()) {
-            StridedView2D<float> w_view = ...;
-            using TypedDistance = typename Distance::rebind<float>;
-            TypedDistance typed_distance{w_view, std::forward(ctor_args...)};
-            return compute_distance(out, x, y, join_mode, w_view, std::move(typed_distance));
-            return;
-        }
-    }
-    if constexpr(is_type_in<double, SupportedInputValueTypes>::value) {
-        if (input_dtype.equal(py::dtype::of<double>()) {
-            compute_distance_t<double>(out, x, y, join_mode, std::forward(distance));
-            return;
-        }
-    }
-    if constexpr(is_type_in<long double, SupportedInputValueTypes>::value) {
-        if (input_dtype.equal(py::dtype::of<long double>()) {
-            compute_distance_t<long double>(out, x, y, join_mode, std::forward(distance));
-            return;
-        }
-    }
-    }
-    }
-    else {
-        static_assert(false, "invalid metric_class");
-    }
-
     py::dtype input_dtype = x.dtype();
-    if (!input_dtype.equal(y.dtype())) {
-        throw std::invalid_argument("x and y must have the same dtype");
-    }
 
     // Type switches are enclosed in `if constexpr(...)` to avoid unused
     // template instantiations.
-    if constexpr(is_type_in<bool, SupportedInputValueTypes>::value) {
-        if (input_dtype.equal(py::dtype::of<bool>()) {
-            compute_distance_t<bool>(out, x, y, join_mode, std::forward(distance));
-            return;
+//    if constexpr(is_type_in<bool, supported_value_types>::value) {
+//        if (input_dtype.equal(py::dtype::of<bool>()) {
+//            compute_distance_t<bool>(out, x, y, join_mode, std::forward(distance));
+//            return;
+//        }
+//    }
+#if SPECIALIZE_FLOAT32
+    if constexpr(is_type_in<float, supported_value_types>::value) {
+        if (input_dtype.equal(py::dtype::of<float>())) {
+            return compute_distance_t<float>(out_obj, x, y, join_mode, std::forward<Distance>(distance));
         }
     }
-    if constexpr(is_type_in<float, SupportedInputValueTypes>::value) {
-        if (input_dtype.equal(py::dtype::of<float>()) {
-            compute_distance_t<float>(out, x, y, join_mode, std::forward(distance));
-            return;
+#endif
+    if constexpr(is_type_in<double, supported_value_types>::value) {
+        if (input_dtype.equal(py::dtype::of<double>())) {
+            return compute_distance_t<double>(out_obj, x, y, join_mode, std::forward<Distance>(distance));
         }
     }
-    if constexpr(is_type_in<double, SupportedInputValueTypes>::value) {
-        if (input_dtype.equal(py::dtype::of<double>()) {
-            compute_distance_t<double>(out, x, y, join_mode, std::forward(distance));
-            return;
-        }
-    }
-    if constexpr(is_type_in<long double, SupportedInputValueTypes>::value) {
-        if (input_dtype.equal(py::dtype::of<long double>()) {
-            compute_distance_t<long double>(out, x, y, join_mode, std::forward(distance));
-            return;
+    if constexpr(is_type_in<long double, supported_value_types>::value) {
+        if (input_dtype.equal(py::dtype::of<long double>())) {
+            return compute_distance_t<long double>(out_obj, x, y, join_mode, std::forward<Distance>(distance));
         }
     }
     throw std::invalid_argument("unexpected input dtype");
 }
+
+//// Compute the given metric between rows of 2D arrays x and y using the given
+//// join mode, and store the result into out.  The dtype of x and y must match
+//// and must be equal to one of SupportedInputValueTypes.
+//template <MetricClass metric_class, class Distance, class CtorArgs...>
+//void compute_weighted_distance(const py::object &out_obj,
+//                               const py::object &x_obj, const py::array &y_obj,
+//                               JoinMode join_mode, const py::object &w_obj,
+//                               WeightShape weight_shape,
+//                               CtorArgs &&ctor_args...) {
+//
+//    py::array w = npy_asarray(w_obj);
+//    auto xy = prepare_xy(x_obj, y_obj, join_mode, w.dtype(), metric_class);
+//    py::array x = xy.first;
+//    py::array y = xy.second;
+//
+//    if (weight_shape == WeightShape::Matrix) {
+//        w = prepare_weight_matrix(...);
+//    } else {
+//        throw std::invalid_argument("unsupported weight_shape");
+//    }
+//
+//    if constexpr(metric_class == MetricClass::Real) {
+//        py::dtype = w.dtype();
+//        if (!(x.dtype().equal(dtype) && y.dtype().equal(dtype))) {
+//            throw std::invalid_argument("x, y, w must have same dtype for real metric");
+//        }
+//#if SPECIALIZE_FLOAT32
+//        if (dtype.equal(py::dtype::of<float>()) {
+//            StridedView2D<float> w_view = ...;
+//            using TypedDistance = typename Distance::rebind<float>;
+//            TypedDistance typed_distance{w_view, std::forward(ctor_args...)};
+//            return compute_distance(out, x, y, join_mode, w_view, std::move(typed_distance));
+//            return;
+//        }
+//    }
+//    if constexpr(is_type_in<double, SupportedInputValueTypes>::value) {
+//        if (input_dtype.equal(py::dtype::of<double>()) {
+//            compute_distance_t<double>(out, x, y, join_mode, std::forward(distance));
+//            return;
+//        }
+//    }
+//    if constexpr(is_type_in<long double, SupportedInputValueTypes>::value) {
+//        if (input_dtype.equal(py::dtype::of<long double>()) {
+//            compute_distance_t<long double>(out, x, y, join_mode, std::forward(distance));
+//            return;
+//        }
+//    }
+//    }
+//    }
+//    else {
+//        static_assert(false, "invalid metric_class");
+//    }
+//
+//    py::dtype input_dtype = x.dtype();
+//    if (!input_dtype.equal(y.dtype())) {
+//        throw std::invalid_argument("x and y must have the same dtype");
+//    }
+//
+//    // Type switches are enclosed in `if constexpr(...)` to avoid unused
+//    // template instantiations.
+//    if constexpr(is_type_in<bool, SupportedInputValueTypes>::value) {
+//        if (input_dtype.equal(py::dtype::of<bool>()) {
+//            compute_distance_t<bool>(out, x, y, join_mode, std::forward(distance));
+//            return;
+//        }
+//    }
+//    if constexpr(is_type_in<float, SupportedInputValueTypes>::value) {
+//        if (input_dtype.equal(py::dtype::of<float>()) {
+//            compute_distance_t<float>(out, x, y, join_mode, std::forward(distance));
+//            return;
+//        }
+//    }
+//    if constexpr(is_type_in<double, SupportedInputValueTypes>::value) {
+//        if (input_dtype.equal(py::dtype::of<double>()) {
+//            compute_distance_t<double>(out, x, y, join_mode, std::forward(distance));
+//            return;
+//        }
+//    }
+//    if constexpr(is_type_in<long double, SupportedInputValueTypes>::value) {
+//        if (input_dtype.equal(py::dtype::of<long double>()) {
+//            compute_distance_t<long double>(out, x, y, join_mode, std::forward(distance));
+//            return;
+//        }
+//    }
+//    throw std::invalid_argument("unexpected input dtype");
+//}
 
 //py::array xdist_dice(JoinMode join_mode,
 //                     py::object x_obj, py::object y_obj=py::none(),
@@ -1239,32 +1245,32 @@ void compute_weighted_distance(const py::object &out_obj,
 //    return out;
 //}
 
-//py::array xdist_euclidean(JoinMode join_mode, py::object x_obj, py::object y_obj,
-//                          py::object w_obj, py::object out_obj) {
-//    if (w_obj.is_none()) {
-//        auto [x, y] = prepare_xy(x_obj, y_obj, join_mode, MetricClass::Real);
-//        return compute_distance<EuclideanDistance2>(out, x, y, join_mode);
-//    } else {
+py::array xdist_euclidean(JoinMode join_mode, py::object x_obj, py::object y_obj,
+                          py::object w_obj, py::object out_obj) {
+    if (w_obj.is_none()) {
+        return compute_distance(out_obj, x_obj, y_obj, join_mode, EuclideanDistance2{});
+    } else {
+        throw std::invalid_argument("not implemented");
+    }
 //        py::array w = npy_asarray(w_obj);
 //        auto [x, y] = prepare_xy(x_obj, y_obj, join_mode, MetricClass::Real, w.dtype());
 //        w = prepare_w(w, weightShape::Vector, x.shape(1), x.dtype());
 //        return compute_weighted_distance<EuclideanDistance2>(out, x, y, join_mode, w);
-//    }
-//}
-
-py::array xdist_mahalanobis(JoinMode join_mode, py::object x_obj, py::object y_obj,
-                            py::object w_obj, py::object out_obj) {
-
-    // x, y, w: py::array
-    auto [x, y] = ...
-    auto w = ..., w] = prepare_xyw(x_obj, y_obj, w_obj, return_type,
-                                 MetricClass::Real, WeightShape::Matrix);
-
-    // out no need ? can move to compute
-//    py::array out = prepare_output_for_real_metric(x, y, w, return_type, out_obj);
-
-    return compute_weighted_distance<MahalanobisDistance>(out, x, y, join_mode, w);
 }
+
+//py::array xdist_mahalanobis(JoinMode join_mode, py::object x_obj, py::object y_obj,
+//                            py::object w_obj, py::object out_obj) {
+//
+//    // x, y, w: py::array
+//    auto [x, y] = ...
+//    auto w = ..., w] = prepare_xyw(x_obj, y_obj, w_obj, return_type,
+//                                 MetricClass::Real, WeightShape::Matrix);
+//
+//    // out no need ? can move to compute
+////    py::array out = prepare_output_for_real_metric(x, y, w, return_type, out_obj);
+//
+//    return compute_weighted_distance<MahalanobisDistance>(out, x, y, join_mode, w);
+//}
 
 ///////////////////////////////////////////////////////////////
 // END OF NEW STUFF
@@ -1277,15 +1283,18 @@ PYBIND11_MODULE(_distance_pybind, m) {
     using namespace pybind11::literals;
 
     // Helper functions.
-    m.def("get_native_floating_dtype", get_native_floating_dtype, "dtype"_a);
-    m.def("prepare_input", prepare_input,
-          "x"_a, "y"_a, "return_type"_a, "extra_dtype"_a=py::none(), "metric_class"_a="real");
-    m.def("prepare_weight_matrix", prepare_weight_matrix,
-          "w"_a, "n"_a, "least_dtype"_a=py::none(), "promote_shape"_a=false);
+//    m.def("get_native_floating_dtype", get_native_floating_dtype, "dtype"_a);
+//    m.def("prepare_input", prepare_input,
+//          "x"_a, "y"_a, "return_type"_a, "extra_dtype"_a=py::none(), "metric_class"_a="real");
+//    m.def("prepare_weight_matrix", prepare_weight_matrix,
+//          "w"_a, "n"_a, "least_dtype"_a=py::none(), "promote_shape"_a=false);
 
     // Individual distance functions.
-    m.def("xdist_mahalanobis", xdist_mahalanobis,
-          "join_mode"_a, "x"_a, "y"_a, py::kwonly(), "w"_a, "out"_a=py::none());
+//    m.def("xdist_mahalanobis", xdist_mahalanobis,
+//          "join_mode"_a, "x"_a, "y"_a, py::kw_only(), "w"_a, "out"_a=py::none());
+
+    m.def("xdist_euclidean", xdist_euclidean,
+          "join_mode"_a, "x"_a, "y"_a, py::kw_only(), "w"_a=py::none(), "out"_a=py::none());
 
     m.def("pdist_canberra",
           [](py::object x, py::object w, py::object out) {

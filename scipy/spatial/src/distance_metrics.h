@@ -972,20 +972,21 @@ inline void Precondition(bool condition) {
 //#endif
 //};
 
-template <class InputType>
-struct EuclideanDistance {
-    using input_type = InputType;
-    using output_type = input_type;
+//template <class InputType>
+struct EuclideanDistance2 {
+//    using input_type = InputType;
+//    using output_type = input_type;
 
     template <typename Span>
-    output_type operator()(const Span &x, const Span &y) const {
-        static_assert(std::is_same<typename Span::value_type, input_type>::value,
-                      "Span::value_type must be InputType");
-        Precondition(x.size() == y.size());
-
+    typename Span::value_type
+    operator()(const Span &x, const Span &y) const {
+        using input_type = typename Span::value_type;
+        using output_type = input_type;
         using working_type = typename std::conditional<
             std::is_same<input_type, float>::value, double, input_type>::type;
         using index_t = typename Span::size_type;
+
+        Precondition(x.size() == y.size());
 
         const index_t n = x.size();
         working_type s = 0;
@@ -1018,33 +1019,33 @@ struct EuclideanDistance {
 //        return static_cast<output_type>(std::sqrt(s));
 //    }
 
-// Straightforward implementation of Mahalanobis distance with known n-by-n
-// weight matrix.  The time complexity is O(n^2).
-template <class T>
-struct MahalanobisDistance {
-
-//    using input_type = T;
-//    using weight_type = T;
-//    using output_type = T;
-
-    template <class Span, class WeightMatrix>
-    output_type operator()(const Span &x, const Span &y, const WeightMatrix &w) const {
-        Precondition(w.shape(0) == w.shape(1));
-        Precondition(x.size() == w.shape(0) && y.size() == w.shape(0));
-
-        using working_type = typename std::conditional<
-            std::is_same<input_type, float>::value, double, input_type>;
-        using index_t = typename Span::size_type;
-
-        const index_t n = x.size();
-        working_type s = 0;
-        for (index_t i = 0; i < n; ++i) {
-            working_type t = 0;
-            for (index_t j = 0; j < n; ++j) {
-                t += static_cast<working_type>(w(i, j)) * static_cast<working_type>(y[j]);
-            }
-            s += static_cast<working_type>(x[i]) * t;
-        }
-        return static_cast<output_type>(std::sqrt(s));
-    }
-};
+//// Straightforward implementation of Mahalanobis distance with known n-by-n
+//// weight matrix.  The time complexity is O(n^2).
+//template <class T>
+//struct MahalanobisDistance {
+//
+////    using input_type = T;
+////    using weight_type = T;
+////    using output_type = T;
+//
+//    template <class Span, class WeightMatrix>
+//    output_type operator()(const Span &x, const Span &y, const WeightMatrix &w) const {
+//        Precondition(w.shape(0) == w.shape(1));
+//        Precondition(x.size() == w.shape(0) && y.size() == w.shape(0));
+//
+//        using working_type = typename std::conditional<
+//            std::is_same<input_type, float>::value, double, input_type>;
+//        using index_t = typename Span::size_type;
+//
+//        const index_t n = x.size();
+//        working_type s = 0;
+//        for (index_t i = 0; i < n; ++i) {
+//            working_type t = 0;
+//            for (index_t j = 0; j < n; ++j) {
+//                t += static_cast<working_type>(w(i, j)) * static_cast<working_type>(y[j]);
+//            }
+//            s += static_cast<working_type>(x[i]) * t;
+//        }
+//        return static_cast<output_type>(std::sqrt(s));
+//    }
+//};
