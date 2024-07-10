@@ -1034,10 +1034,15 @@ py::array compute_distance_t(const py::object &out_obj,
     const input_type * const x_data = static_cast<const input_type *>(x.data());
     const input_type * const y_data = static_cast<const input_type *>(y.data());
 
-    const index_t x_stride_0 = x.strides(0);
-    const index_t x_stride_1 = x.strides(1);
-    const index_t y_stride_0 = y.strides(0);
-    const index_t y_stride_1 = y.strides(1);
+    ArrayDescriptor x_arr = get_descriptor(x);
+    ArrayDescriptor y_arr = get_descriptor(y);
+    if (!(x_arr.ndim == 2 && y_arr.ndim == 2)) {
+        throw std::invalid_argument("invalid descriptor");
+    }
+    const index_t x_stride_0 = x_arr.strides[0];
+    const index_t x_stride_1 = x_arr.strides[1];
+    const index_t y_stride_0 = y_arr.strides[0];
+    const index_t y_stride_1 = y_arr.strides[1];
 
     output_type *out_data = static_cast<output_type*>(out.mutable_data());
 
@@ -1245,10 +1250,10 @@ py::array compute_distance(const py::object &out_obj,
 //    return out;
 //}
 
-py::array xdist_euclidean(JoinMode join_mode, py::object x_obj, py::object y_obj,
+py::array xdist_euclidean(char join_mode, py::object x_obj, py::object y_obj,
                           py::object w_obj, py::object out_obj) {
     if (w_obj.is_none()) {
-        return compute_distance(out_obj, x_obj, y_obj, join_mode, EuclideanDistance2{});
+        return compute_distance(out_obj, x_obj, y_obj, static_cast<JoinMode>(join_mode), EuclideanDistance2{});
     } else {
         throw std::invalid_argument("not implemented");
     }
