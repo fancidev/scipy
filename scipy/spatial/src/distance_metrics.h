@@ -774,8 +774,6 @@ struct YuleDistance {
     }
 };
 
-#define SPECIALIZE_FLOAT32 0
-
 // 'assert' like function for code documentation
 inline void Precondition(bool condition) {
     // do nothing
@@ -786,170 +784,205 @@ inline void Precondition(bool condition) {
 // one type parameter, T.  The input dtype, output dtype, as well as the
 // dtype of any additional parameters (such as w) is a function of T.
 
-// Computes output type of metrics from input type, where appropriate
-template <typename T>
-struct promoted_floating {
-    using type = double;
-};
+//// Computes output type of metrics from input type, where appropriate
+//template <typename T>
+//struct promoted_floating {
+//    using type = double;
+//};
+//
+//template <>
+//struct promoted_floating<float> {
+//    using type = float;
+//};
+//
+//template <>
+//struct promoted_floating<long double> {
+//    using type = long double;
+//};
+//
+//template <typename T>
+//using promoted_floating_t = typename promoted_floating<T>::type;
 
-template <>
-struct promoted_floating<float> {
-    using type = float;
-};
+//template <typename T>
+//inline T fuzzy_and(T x, T y) {
+//    return x * y;
+//}
+//
+//template <typename T>
+//inline T fuzzy_xor(T x, T y) {
+//    return x * (T(1) - y) + y * (T(1) - x);
+//}
+//
+//template <typename T>
+//inline T fuzzy_nor(T x, T y) {
+//    return (T(1) - x) * (T(1) - y);
+//}
+//
+//inline bool fuzzy_and(bool x, bool y) { return x & y; }
+//inline bool fuzzy_xor(bool x, bool y) { return x ^ y; }
+//inline bool fuzzy_nor(bool x, bool y) { return ~x & ~y; }
 
-template <>
-struct promoted_floating<long double> {
-    using type = long double;
-};
+//template <>
+//struct DiceDistance {
+//
+//    // todo: move this to compute_distance
+//    using supported_input_types = std::tuple<bool, double, long double>;
+//
+//    // Boolean input; "quick" path
+//    template <class Span>
+//    std::enable_if_t<std::is_same_v<typename Span::value_type, bool>, double>
+//    operator()(const Span &x, const Span &y) const {
+//        Precondition(x.size() == y.size());
+//        using output_type = double;
+//        using working_type = std::size_t;
+//        using index_t = typename Span::size_type;
+//
+//        const index_t n = x.size();
+//        working_type n_tt = 0;
+//        working_type n_tf_ft = 0;
+//        for (index_t i = 0; i < n; ++i) {
+//            bool x_i = x[i];
+//            bool y_i = y[i];
+//            n_tt += static_cast<working_type>(x_i & y_i);
+//            n_tf_ft += static_cast<working_type>(x_i ^ y_i);
+//        }
+//        // If all values in x and y are zero, nan is returned
+//        return static_cast<output_type>(n_tf_ft) / static_cast<output_type>(2*n_tt + n_tf_ft);
+//    }
+//
+//    // Fuzzy boolean input; "slow" path
+//    // = 1 - 2*sum(x*y)/(sum(x)+sum(y))
+//    // x,y are "supposed" to be between 0.0 and 1.0, but this is not checked
+//    template <class Span>
+//    typename std::enable_if<!std::is_same<typename Span::value_type, bool>::value,
+//                            typename Span::value_type>::type
+//    operator()(const Span &x, const Span &y) const {
+//        Precondition(x.size() == y.size());
+//        using output_type = typename Span::value_type;
+//        using working_type = output_type;
+//        using index_t = typename Span::size_type;
+//
+//        const index_t n = x.size();
+//        working_type s_and = 0;
+//        working_type s_xor = 0;
+//        for (index_t i = 0; i < n; ++i) {
+//            working_type x_i = static_cast<working_type>(x[i]);
+//            working_type y_i = static_cast<working_type>(y[i]);
+//            working_type one = 1;
+//            s_and += fuzzy_and(x_i, y_i);
+//            s_xor += fuzzy_xor(x_i, y_i);
+//        }
+//        // If all values in x and y are zero, nan is returned
+//        return s_xor / (2*s_and + s_xor);
+//    }
+//};
+//
+//
+//template <typename WeightType /* = std::span<double> */>
+//struct WeightedDiceDistance {
+//
+////    using supported_input_types = std::tuple<bool>;
+//
+//    WeightType w;
+//
+//    template <class Span>
+//    typename std::conditional<std::is_same<typename Span::value_type, bool>::value,
+//                              double, typename Span::value_type>::type
+//    operator()(const Span &x, const Span &y, const Span &w) const {
+//        Precondition(x.size() == w.size() && y.size() == w.size());
+//
+//        using weight_type = typename WeightType::value_type;
+//        static_assert(std::is_same<typename Span::value_type, bool>::value ||
+//                      std::is_same<typename Span::value_type, weight_type>::value,
+//                      "Non-boolean x and y must have the same type as w");
+//
+//        using output_type = typename std::conditional<
+//            std::is_same<typename Span::value_type, bool>::value,
+//            double, typename Span::value_type>::type;
+//        using index_t = typename Span::size_type;
+//
+//        const index_t n = x.size();
+//        output_type s_and = 0;
+//        output_type s_xor = 0;
+//        for (index_t i = 0; i < n; ++i) {
+//            s_and += w[i] * fuzzy_and(x[i], y[i]);
+//            s_xor += w[i] * fuzzy_xor(x[i], y[i]);
+//        }
+//        // If all values in x and y are zero, nan is returned
+//        return (s_xor) / (2*s_and + s_xor);
+//    }
+//};
 
-template <typename T>
-using promoted_floating_t = typename promoted_floating<T>::type;
-
-template <typename T>
-inline T fuzzy_and(T x, T y) {
-    return x * y;
-}
-
-template <typename T>
-inline T fuzzy_xor(T x, T y) {
-    return x * (T(1) - y) + y * (T(1) - x);
-}
-
-template <typename T>
-inline T fuzzy_nor(T x, T y) {
-    return (T(1) - x) * (T(1) - y);
-}
-
-inline bool fuzzy_and(bool x, bool y) { return x & y; }
-inline bool fuzzy_xor(bool x, bool y) { return x ^ y; }
-inline bool fuzzy_nor(bool x, bool y) { return ~x & ~y; }
-
-struct UnweightedDiceDistance {
-
-    // todo: move this to compute_distance
-    using supported_input_types = std::tuple<bool, double, long double>;
-
-    // Boolean input; "quick" path
-    template <class Span>
-    std::enable_if_t<std::is_same_v<typename Span::value_type, bool>, double>
-    operator()(const Span &x, const Span &y) const {
-        Precondition(x.size() == y.size());
-        using output_type = double;
-        using working_type = std::size_t;
-        using index_t = typename Span::size_type;
-
-        const index_t n = x.size();
-        working_type n_tt = 0;
-        working_type n_tf_ft = 0;
-        for (index_t i = 0; i < n; ++i) {
-            bool x_i = x[i];
-            bool y_i = y[i];
-            n_tt += static_cast<working_type>(x_i & y_i);
-            n_tf_ft += static_cast<working_type>(x_i ^ y_i);
-        }
-        // If all values in x and y are zero, nan is returned
-        return static_cast<output_type>(n_tf_ft) / static_cast<output_type>(2*n_tt + n_tf_ft);
-    }
-
-    // Fuzzy boolean input; "slow" path
-    // = 1 - 2*sum(x*y)/(sum(x)+sum(y))
-    // x,y are "supposed" to be between 0.0 and 1.0, but this is not checked
-    template <class Span>
-    typename std::enable_if<!std::is_same<typename Span::value_type, bool>::value,
-                            typename Span::value_type>::type
-    operator()(const Span &x, const Span &y) const {
-        Precondition(x.size() == y.size());
-        using output_type = typename Span::value_type;
-        using working_type = output_type;
-        using index_t = typename Span::size_type;
-
-        const index_t n = x.size();
-        working_type s_and = 0;
-        working_type s_xor = 0;
-        for (index_t i = 0; i < n; ++i) {
-            working_type x_i = static_cast<working_type>(x[i]);
-            working_type y_i = static_cast<working_type>(y[i]);
-            working_type one = 1;
-            s_and += fuzzy_and(x_i, y_i);
-            s_xor += fuzzy_xor(x_i, y_i);
-        }
-        // If all values in x and y are zero, nan is returned
-        return s_xor / (2*s_and + s_xor);
-    }
-};
-
-template <typename WeightType /* = std::span<double> */>
-struct WeightedDiceDistance {
-
-//    using supported_input_types = std::tuple<bool>;
-
-    WeightType w;
-
-    template <class Span>
-    typename std::conditional<std::is_same<typename Span::value_type, bool>::value,
-                              double, typename Span::value_type>::type
-    operator()(const Span &x, const Span &y) const {
-        Precondition(x.size() == w.size() && y.size() == w.size());
-
-        using weight_type = typename WeightType::value_type;
-        static_assert(std::is_same<typename Span::value_type, bool>::value ||
-                      std::is_same<typename Span::value_type, weight_type>::value,
-                      "Non-boolean x and y must have the same type as w");
-
-        using output_type = typename std::conditional<
-            std::is_same<typename Span::value_type, bool>::value,
-            double, typename Span::value_type>::type;
-        using index_t = typename Span::size_type;
-
-        const index_t n = x.size();
-        output_type s_and = 0;
-        output_type s_xor = 0;
-        for (index_t i = 0; i < n; ++i) {
-            s_and += w[i] * fuzzy_and(x[i], y[i]);
-            s_xor += w[i] * fuzzy_xor(x[i], y[i]);
-        }
-        // If all values in x and y are zero, nan is returned
-        return (s_xor) / (2*s_and + s_xor);
-    }
-};
+//template <class T>
+//struct WeightedFuzzyDiceDistance {
+//
+//    WeightType w;
+//
+//    template <class Span>
+//    typename std::conditional<std::is_same<typename Span::value_type, bool>::value,
+//                              double, typename Span::value_type>::type
+//    operator()(const Span &x, const Span &y, const WeightSpan &w) const {
+//        Precondition(x.size() == w.size() && y.size() == w.size());
+//
+//        using weight_type = typename WeightType::value_type;
+//        static_assert(std::is_same<typename Span::value_type, bool>::value ||
+//                      std::is_same<typename Span::value_type, weight_type>::value,
+//                      "Non-boolean x and y must have the same type as w");
+//
+//        using output_type = typename std::conditional<
+//            std::is_same<typename Span::value_type, bool>::value,
+//            double, typename Span::value_type>::type;
+//        using index_t = typename Span::size_type;
+//
+//        const index_t n = x.size();
+//        output_type s_and = 0;
+//        output_type s_xor = 0;
+//        for (index_t i = 0; i < n; ++i) {
+//            s_and += w[i] * fuzzy_and(x[i], y[i]);
+//            s_xor += w[i] * fuzzy_xor(x[i], y[i]);
+//        }
+//        // If all values in x and y are zero, nan is returned
+//        return (s_xor) / (2*s_and + s_xor);
+//    }
+//};
 
 
-// Base class for metrics defined for real (or fuzzy boolean) input vectors.
-// The general parameterization supports a weight parameter.
-template <typename WeightType>
-struct RealDistance {
-    using weight_value_type = typename WeightType::value_type;
+//// Base class for metrics defined for real (or fuzzy boolean) input vectors.
+//// The general parameterization supports a weight parameter.
+//template <typename WeightType>
+//struct RealDistance {
+//    using weight_value_type = typename WeightType::value_type;
+//
+//    // For weighted metrics, constrain the input dtype to be equal to the
+//    // weight dtype in order to limit the number of template instantiations.
+//    using supported_input_value_types = std::tuple<weight_value_type>;
+//
+//    // Store the weight as a member.
+//    WeightType w;
+//};
 
-    // For weighted metrics, constrain the input dtype to be equal to the
-    // weight dtype in order to limit the number of template instantiations.
-    using supported_input_value_types = std::tuple<weight_value_type>;
+//// Specialized for unweighted real metrics.
+//template <>
+//struct RealDistance<void> {
+//    // More variety of input dtypes are supported for unweighted metrics.
+//#if SPECIALIZE_FLOAT32
+//    using supported_input_value_types = std::tuple<float, double, long double>;
+//#else
+//    using supported_input_value_types = std::tuple<double, long double>;
+//#endif
+//};
 
-    // Store the weight as a member.
-    WeightType w;
-};
+template <class InputType>
+struct EuclideanDistance {
+    using input_type = InputType;
+    using output_type = input_type;
 
-// Specialized for unweighted real metrics.
-template <>
-struct RealDistance<void> {
-    // More variety of input dtypes are supported for unweighted metrics.
-#if SPECIALIZE_FLOAT32
-    using supported_input_value_types = std::tuple<float, double, long double>;
-#else
-    using supported_input_value_types = std::tuple<double, long double>;
-#endif
-};
-
-template <typename WeightType = void>
-struct EuclideanDistance : RealDistance<WeightType> {
-
-    // Unweighted
     template <typename Span>
-    std::enable_if<std::is_void<WeightType>::value, typename Span::value_type>
-    operator()(const Span &x, const Span &y) const {
+    output_type operator()(const Span &x, const Span &y) const {
+        static_assert(std::is_same<typename Span::value_type, input_type>::value,
+                      "Span::value_type must be InputType");
         Precondition(x.size() == y.size());
 
-        using input_type = typename Span::value_type;
-        using output_type = input_type;
         using working_type = typename std::conditional<
             std::is_same<input_type, float>::value, double, input_type>::type;
         using index_t = typename Span::size_type;
@@ -962,6 +995,7 @@ struct EuclideanDistance : RealDistance<WeightType> {
         }
         return static_cast<output_type>(std::sqrt(s));
     }
+};
 
     // Weighted [TO BE COMPLETED]
 //    template <typename Span>
@@ -983,23 +1017,23 @@ struct EuclideanDistance : RealDistance<WeightType> {
 //        }
 //        return static_cast<output_type>(std::sqrt(s));
 //    }
-};
 
 // Straightforward implementation of Mahalanobis distance with known n-by-n
 // weight matrix.  The time complexity is O(n^2).
-template <typename WeightType>
-struct MahalanobisDistance : RealDistance<WeightType> {
+template <class T>
+struct MahalanobisDistance {
 
-    template <typename Span>
-    typename Span::value_type
-    operator()(const Span &x, const Span &y) const {
+//    using input_type = T;
+//    using weight_type = T;
+//    using output_type = T;
+
+    template <class Span, class WeightMatrix>
+    output_type operator()(const Span &x, const Span &y, const WeightMatrix &w) const {
         Precondition(w.shape(0) == w.shape(1));
         Precondition(x.size() == w.shape(0) && y.size() == w.shape(0));
 
-        using input_type = typename Span::value_type;
-        using output_type = input_type;
         using working_type = typename std::conditional<
-            std::is_same<input_type, float>::value, double, input_value_type>;
+            std::is_same<input_type, float>::value, double, input_type>;
         using index_t = typename Span::size_type;
 
         const index_t n = x.size();
