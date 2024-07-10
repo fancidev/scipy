@@ -1073,7 +1073,7 @@ py::array compute_distance_t(const py::object &out_obj,
                                     (join_mode == JoinMode::Inner) ? i : (i + 1);
             const index_t j_last = (join_mode == JoinMode::Inner) ? (i + 1) : q;
 
-            const input_type *y_row = y_data;
+            const input_type *y_row = y_data + y_stride_0 * j_first;
             for (index_t j = j_first; j < j_last; ++j) {
                 if (!y_contiguous) /* unlikely */ {
                     for (index_t k = 0; k < n; ++k) {
