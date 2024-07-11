@@ -1814,6 +1814,14 @@ _METRIC_INFOS = [
         pdist_func=_distance_pybind.pdist_kulczynski1,
     ),
     MetricInfo(
+        canonical_name='kulczynski12',
+        aka={'kulczynski12'},
+        types=['bool'],
+        dist_func=kulczynski1,
+        cdist_func=_distance_pybind.cdist_kulczynski12,
+        pdist_func=_distance_pybind.pdist_kulczynski12,
+    ),
+    MetricInfo(
         canonical_name='mahalanobis',
         aka={'mahalanobis', 'mahal', 'mah'},
         validator=_validate_mahalanobis_kwargs,

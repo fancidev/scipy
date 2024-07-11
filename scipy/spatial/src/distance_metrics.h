@@ -576,6 +576,13 @@ struct RogerstanimotoFormula {
     }
 };
 
+struct Kulczynski1Formula {
+    template <typename T>
+    static ALWAYS_INLINE T formula(T s_and, T s_xor, T s_total) {
+        return s_and / s_xor;
+    }
+};
+
 struct DiceDistance {
     template <typename T>
     struct Acc {
