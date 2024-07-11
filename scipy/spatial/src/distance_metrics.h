@@ -500,41 +500,41 @@ struct FuzzyBoolDistance {
         T s_xor = 0;
     };
 
-    template <typename OutputType>
-    void operator()(StridedView2D<OutputType> out, StridedView2D<const bool> x, StridedView2D<const bool> y) const {
-
-        intptr_t xs = x.strides[1], ys = y.strides[1];
-        if (!(xs == 1 && ys == 1))
-            throw std::invalid_argument("");
-
-        using output_type = OutputType;
-        using working_type = uint64_t;
-        const output_type s_total = static_cast<output_type>(x.shape[1]);
-
-        int p = x.shape[0];
-        int q = y.shape[0];
-        int n = x.shape[1];
-        for (int i = 0; i < p; ++i) {
-            const bool *x_row = &x(i, 0);
-            const bool *y_row = &y(i, 0);
-            int s_and = 0;
-            int s_xor = 0;
-            for (int k = 0; k < n; k += sizeof(working_type)) {
-                working_type xx = 0, yy = 0;
-                memcpy(&xx, x_row + k, std::min((int)sizeof(working_type), n - k));
-                memcpy(&yy, y_row + k, std::min((int)sizeof(working_type), n - k));
-//                s_and += std::popcount(xx & yy);
-//                s_xor += std::popcount(xx ^ yy);
-                s_and += __builtin_popcount(xx & yy);
-                s_xor += __builtin_popcount(xx ^ yy);
-            }
-            out(i, 0) = Formula::formula(
-                static_cast<output_type>(s_and),
-                static_cast<output_type>(s_xor),
-                s_total
-            );
-        }
-    }
+//    template <typename OutputType>
+//    void operator()(StridedView2D<OutputType> out, StridedView2D<const bool> x, StridedView2D<const bool> y) const {
+//
+//        intptr_t xs = x.strides[1], ys = y.strides[1];
+//        if (!(xs == 1 && ys == 1))
+//            throw std::invalid_argument("");
+//
+//        using output_type = OutputType;
+//        using working_type = uint64_t;
+//        const output_type s_total = static_cast<output_type>(x.shape[1]);
+//
+//        int p = x.shape[0];
+//        int q = y.shape[0];
+//        int n = x.shape[1];
+//        for (int i = 0; i < p; ++i) {
+//            const bool *x_row = &x(i, 0);
+//            const bool *y_row = &y(i, 0);
+//            int s_and = 0;
+//            int s_xor = 0;
+//            for (int k = 0; k < n; k += sizeof(working_type)) {
+//                working_type xx = 0, yy = 0;
+//                memcpy(&xx, x_row + k, std::min((int)sizeof(working_type), n - k));
+//                memcpy(&yy, y_row + k, std::min((int)sizeof(working_type), n - k));
+////                s_and += std::popcount(xx & yy);
+////                s_xor += std::popcount(xx ^ yy);
+//                s_and += __builtin_popcount(xx & yy);
+//                s_xor += __builtin_popcount(xx ^ yy);
+//            }
+//            out(i, 0) = Formula::formula(
+//                static_cast<output_type>(s_and),
+//                static_cast<output_type>(s_xor),
+//                s_total
+//            );
+//        }
+//    }
 
     template <typename OutputType, typename InputType>
     void operator()(StridedView2D<OutputType> out, StridedView2D<const InputType> x, StridedView2D<const InputType> y) const {
