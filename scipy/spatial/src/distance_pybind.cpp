@@ -598,15 +598,15 @@ PYBIND11_MODULE(_distance_pybind, m) {
     }
     using namespace pybind11::literals;
 
-    // Boolean metrics.
+    // ---- boolean metrics ----
     m.def("cdist_dice2",
       [](py::object x, py::object y, py::object w, py::object out) {
-          return cdist(out, x, y, w, FuzzyBoolDistance<DiceFormula>{});
+          return cdist(out, x, y, w, BoolDistance<DiceFormula>{});
       },
       "x"_a, "y"_a, "w"_a=py::none(), "out"_a=py::none());
     m.def("pdist_dice2",
       [](py::object x, py::object w, py::object out) {
-          return pdist(out, x, w, FuzzyBoolDistance<DiceFormula>{});
+          return pdist(out, x, w, BoolDistance<DiceFormula>{});
       },
       "x"_a, "w"_a=py::none(), "out"_a=py::none());
     m.def("cdist_rogerstanimoto2",
@@ -615,7 +615,7 @@ PYBIND11_MODULE(_distance_pybind, m) {
               x = npy_asarray<bool>(x, NPY_ARRAY_FORCECAST);
               y = npy_asarray<bool>(y, NPY_ARRAY_FORCECAST);
           }
-          return cdist(out, x, y, w, FuzzyBoolDistance<RogerstanimotoFormula>{});
+          return cdist(out, x, y, w, BoolDistance<RogerstanimotoFormula>{});
       },
       "x"_a, "y"_a, "w"_a=py::none(), "out"_a=py::none(), "_fuzzy"_a=false);
     m.def("pdist_rogerstanimoto2",
@@ -623,28 +623,29 @@ PYBIND11_MODULE(_distance_pybind, m) {
           if (!_fuzzy) {
               x = npy_asarray<bool>(x, NPY_ARRAY_FORCECAST);
           }
-          return pdist(out, x, w, FuzzyBoolDistance<RogerstanimotoFormula>{});
+          return pdist(out, x, w, BoolDistance<RogerstanimotoFormula>{});
       },
       "x"_a, "w"_a=py::none(), "out"_a=py::none(), "_fuzzy"_a=false);
 
     m.def("cdist_kulczynski12",
       [](py::object x, py::object y, py::object w, py::object out, bool _fuzzy) {
           if (!_fuzzy) {
-              x = npy_asarray<bool>(x);
-              y = npy_asarray<bool>(y);
+              x = npy_asarray<bool>(x, NPY_ARRAY_FORCECAST);
+              y = npy_asarray<bool>(y, NPY_ARRAY_FORCECAST);
           }
-          return cdist(out, x, y, w, FuzzyBoolDistance<Kulczynski1Formula>{});
+          return cdist(out, x, y, w, BoolDistance<Kulczynski1Formula>{});
       },
       "x"_a, "y"_a, "w"_a=py::none(), "out"_a=py::none(), "_fuzzy"_a=false);
     m.def("pdist_kulczynski12",
       [](py::object x, py::object w, py::object out, bool _fuzzy) {
           if (!_fuzzy) {
-              x = npy_asarray<bool>(x);
+              x = npy_asarray<bool>(x, NPY_ARRAY_FORCECAST);
           }
-          return pdist(out, x, w, FuzzyBoolDistance<Kulczynski1Formula>{});
+          return pdist(out, x, w, BoolDistance<Kulczynski1Formula>{});
       },
       "x"_a, "w"_a=py::none(), "out"_a=py::none(), "_fuzzy"_a=false);
 
+    // ---- real metrics ----
     m.def("pdist_canberra",
           [](py::object x, py::object w, py::object out) {
               return pdist(out, x, w, CanberraDistance{});

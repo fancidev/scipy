@@ -411,130 +411,15 @@ struct HammingDistance {
     }
 };
 
-// Generic implementation of metric defined on bool vectors.
+// Generic implementation of metric defined for bool or fuzzy bool vectors.
 template <typename Formula>
 struct BoolDistance {
-
-    template <typename T>
-    struct Acc {
-        Acc() : s_and(0), s_xor(0) {}
-        T s_and, s_xor;
-    };
-
-    template <typename OutputType, typename InputType>
-    void operator()(StridedView2D<OutputType> out, StridedView2D<const InputType> x, StridedView2D<const InputType> y) const {
-        using output_type = OutputType;
-//        using working_type = typename std::conditional<std::is_same<InputType, bool>::value,
-//                                                       intptr_t, OutputType>::type;
-        using working_type = OutputType;
-        const output_type s_total = static_cast<output_type>(x.shape[1]);
-
-        transform_reduce_2d_(out, x, y, [](InputType x, InputType y) INLINE_LAMBDA {
-            Acc<working_type> acc; // TODO: specialize for bool
-//            x = (x != 0);
-//            y = (y != 0);
-            acc.s_and = x * y;
-            acc.s_xor = x * (1 - y) + y * (1 - x); // (x != 0) ^ (y != 0);
-//            acc.s_and = (x != 0) && (y != 0);
-//            acc.s_xor = (x != 0) != (y != 0);
-            return acc;
-        },
-        [s_total](const Acc<working_type>& acc) INLINE_LAMBDA {
-            return Formula::formula(
-                static_cast<output_type>(acc.s_and),
-                static_cast<output_type>(acc.s_xor),
-                s_total);
-        },
-        [](const Acc<working_type>& a, const Acc<working_type>& b) INLINE_LAMBDA {
-            Acc<working_type> acc;
-            acc.s_and = a.s_and + b.s_and;
-            acc.s_xor = a.s_xor + b.s_xor;
-            return acc;
-        });
-    }
-
-    template <typename OutputType, typename InputType, typename WeightType>
-    void operator()(StridedView2D<OutputType> out,
-                    StridedView2D<const InputType> x,
-                    StridedView2D<const InputType> y,
-                    StridedView2D<const WeightType> w) const {
-        using working_type = OutputType;
-        const intptr_t n = w.shape[1];
-        working_type s_total = 0;
-        for (intptr_t i = 0; i < n; ++i) {
-            s_total += w(i, 0);
-        }
-
-        transform_reduce_2d_(out, x, y, w, [](InputType x, InputType y, WeightType w) INLINE_LAMBDA {
-            Acc<working_type> acc;
-//            acc.s_and = w * ((x != 0) & (y != 0));
-//            acc.s_xor = w * ((x != 0) ^ (y != 0));
-            acc.s_and = w * (x * y);
-            acc.s_xor = w * (x*(1-y)+y*(1-x)); // fuzzy is much faster than !=
-            return acc;
-        },
-        [s_total](const Acc<working_type>& acc) INLINE_LAMBDA {
-            return Formula::formula(acc.s_and, acc.s_xor, s_total);
-        },
-        [](const Acc<working_type>& a, const Acc<working_type>& b) INLINE_LAMBDA {
-            Acc<working_type> acc;
-            acc.s_and = a.s_and + b.s_and;
-            acc.s_xor = a.s_xor + b.s_xor;
-            return acc;
-        });
-    }
-};
-
-template <typename Formula>
-struct metric_traits<BoolDistance<Formula>> {
-    static constexpr MetricDomain domain = MetricDomain::Bool;
-};
-
-// Generic implementation of metric defined on fuzzy bool vectors.
-template <typename Formula>
-struct FuzzyBoolDistance {
 
     template <typename T>
     struct Acc {
         T s_and = 0;
         T s_xor = 0;
     };
-
-//    template <typename OutputType>
-//    void operator()(StridedView2D<OutputType> out, StridedView2D<const bool> x, StridedView2D<const bool> y) const {
-//
-//        intptr_t xs = x.strides[1], ys = y.strides[1];
-//        if (!(xs == 1 && ys == 1))
-//            throw std::invalid_argument("");
-//
-//        using output_type = OutputType;
-//        using working_type = uint64_t;
-//        const output_type s_total = static_cast<output_type>(x.shape[1]);
-//
-//        int p = x.shape[0];
-//        int q = y.shape[0];
-//        int n = x.shape[1];
-//        for (int i = 0; i < p; ++i) {
-//            const bool *x_row = &x(i, 0);
-//            const bool *y_row = &y(i, 0);
-//            int s_and = 0;
-//            int s_xor = 0;
-//            for (int k = 0; k < n; k += sizeof(working_type)) {
-//                working_type xx = 0, yy = 0;
-//                memcpy(&xx, x_row + k, std::min((int)sizeof(working_type), n - k));
-//                memcpy(&yy, y_row + k, std::min((int)sizeof(working_type), n - k));
-////                s_and += std::popcount(xx & yy);
-////                s_xor += std::popcount(xx ^ yy);
-//                s_and += __builtin_popcount(xx & yy);
-//                s_xor += __builtin_popcount(xx ^ yy);
-//            }
-//            out(i, 0) = Formula::formula(
-//                static_cast<output_type>(s_and),
-//                static_cast<output_type>(s_xor),
-//                s_total
-//            );
-//        }
-//    }
 
     template <typename OutputType, typename InputType>
     void operator()(StridedView2D<OutputType> out, StridedView2D<const InputType> x, StridedView2D<const InputType> y) const {
@@ -603,7 +488,7 @@ struct FuzzyBoolDistance {
 };
 
 template <typename Formula>
-struct metric_traits<FuzzyBoolDistance<Formula>> {
+struct metric_traits<BoolDistance<Formula>> {
     static constexpr MetricDomain domain = MetricDomain::Bool;
 };
 
