@@ -1386,6 +1386,31 @@ def dice(u, v, w=None):
     return float((ntf + nft) / np.array(2.0 * ntt + ntf + nft))
 
 
+def _cdist_dice(XA, XB, w=None, out=None, _fuzzy=None):
+    XA = np.asarray(XA)
+    XB = np.asarray(XB)
+    if _fuzzy is None:
+        # For backward compatibility, only enable fuzzy for unweighted metric
+        _fuzzy = (w is None)
+    if not _fuzzy:
+        if XA.dtype != bool:
+            XA = np.ascontiguousarray(XA, dtype=bool)
+        if XB.dtype != bool:
+            XB = np.ascontiguousarray(XB, dtype=bool)
+    return _distance_pybind.cdist_dice2(XA, XB, w, out)
+
+
+def _pdist_dice(X, w=None, out=None, _fuzzy=None):
+    X = np.asarray(X)
+    if _fuzzy is None:
+        # For backward compatibility, only enable fuzzy for unweighted metric
+        _fuzzy = (w is None)
+    if not _fuzzy:
+        if X.dtype != bool:
+            X = np.ascontiguousarray(X, dtype=bool)
+    return _distance_pybind.pdist_dice2(X, w, out)
+
+
 def rogerstanimoto(u, v, w=None):
     """
     Compute the Rogers-Tanimoto dissimilarity between two boolean 1-D arrays.
@@ -1740,6 +1765,16 @@ _METRIC_INFOS = [
         pdist_func=_distance_pybind.pdist_dice,
     ),
     MetricInfo(
+        canonical_name='dice2',
+        aka={'dice2'},
+        types=['bool'],
+        dist_func=dice,
+        cdist_func=_cdist_dice,
+        pdist_func=_pdist_dice,
+        # cdist_func=_distance_pybind.cdist_dice2,
+        # pdist_func=_distance_pybind.pdist_dice2,
+    ),
+    MetricInfo(
         canonical_name='euclidean',
         aka={'euclidean', 'euclid', 'eu', 'e'},
         dist_func=euclidean,
@@ -1801,6 +1836,14 @@ _METRIC_INFOS = [
         dist_func=rogerstanimoto,
         cdist_func=_distance_pybind.cdist_rogerstanimoto,
         pdist_func=_distance_pybind.pdist_rogerstanimoto,
+    ),
+    MetricInfo(
+        canonical_name='rogerstanimoto2',
+        aka={'rogerstanimoto2'},
+        types=['bool'],
+        dist_func=rogerstanimoto,
+        cdist_func=_distance_pybind.cdist_rogerstanimoto2,
+        pdist_func=_distance_pybind.pdist_rogerstanimoto2,
     ),
     MetricInfo(
         canonical_name='russellrao',

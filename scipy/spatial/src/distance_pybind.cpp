@@ -588,6 +588,36 @@ PYBIND11_MODULE(_distance_pybind, m) {
     }
     using namespace pybind11::literals;
 
+    // Boolean metrics.
+    m.def("cdist_dice2",
+      [](py::object x, py::object y, py::object w, py::object out) {
+          return cdist(out, x, y, w, BoolDistance<DiceFormula>{});
+      },
+      "x"_a, "y"_a, "w"_a=py::none(), "out"_a=py::none());
+    m.def("pdist_dice2",
+      [](py::object x, py::object w, py::object out) {
+          return pdist(out, x, w, BoolDistance<DiceFormula>{});
+      },
+      "x"_a, "w"_a=py::none(), "out"_a=py::none());
+    m.def("cdist_rogerstanimoto2",
+      [](py::object x, py::object y, py::object w, py::object out, bool _fuzzy) {
+          if (_fuzzy) {
+              return cdist(out, x, y, w, FuzzyBoolDistance<RogerstanimotoFormula>{});
+          } else {
+              return cdist(out, x, y, w, BoolDistance<RogerstanimotoFormula>{});
+          }
+      },
+      "x"_a, "y"_a, "w"_a=py::none(), "out"_a=py::none(), "_fuzzy"_a=false);
+    m.def("pdist_rogerstanimoto2",
+      [](py::object x, py::object w, py::object out, bool _fuzzy) {
+          if (_fuzzy) {
+              return pdist(out, x, w, FuzzyBoolDistance<RogerstanimotoFormula>{});
+          } else {
+              return pdist(out, x, w, BoolDistance<RogerstanimotoFormula>{});
+          }
+      },
+      "x"_a, "w"_a=py::none(), "out"_a=py::none(), "_fuzzy"_a=false);
+
     m.def("pdist_canberra",
           [](py::object x, py::object w, py::object out) {
               return pdist(out, x, w, CanberraDistance{});
