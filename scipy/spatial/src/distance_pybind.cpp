@@ -612,9 +612,12 @@ PYBIND11_MODULE(_distance_pybind, m) {
     m.def("cdist_rogerstanimoto2",
       [](py::object x, py::object y, py::object w, py::object out, bool _fuzzy) {
           if (_fuzzy) {
+              throw std::invalid_argument("not");
               return cdist(out, x, y, w, FuzzyBoolDistance<RogerstanimotoFormula>{});
           } else {
-              return cdist(out, x, y, w, BoolDistance<RogerstanimotoFormula>{});
+              py::array_t<bool> x_arr = npy_asarray<bool>(x, NPY_ARRAY_FORCECAST);
+              py::array_t<bool> y_arr = npy_asarray<bool>(y, NPY_ARRAY_FORCECAST);
+              return cdist(out, x_arr, y_arr, w, BoolDistance<RogerstanimotoFormula>{});
           }
 //          if (!_fuzzy) {
 //              x = npy_asarray<bool>(x);
@@ -625,14 +628,10 @@ PYBIND11_MODULE(_distance_pybind, m) {
       "x"_a, "y"_a, "w"_a=py::none(), "out"_a=py::none(), "_fuzzy"_a=false);
     m.def("pdist_rogerstanimoto2",
       [](py::object x, py::object w, py::object out, bool _fuzzy) {
-//          if (!_fuzzy) {
-//              x = npy_asarray<bool>(x);
-//          }
-          if (_fuzzy) {
-              return pdist(out, x, w, FuzzyBoolDistance<RogerstanimotoFormula>{});
-          } else {
-              return pdist(out, x, w, BoolDistance<RogerstanimotoFormula>{});
+          if (!_fuzzy) {
+              x = npy_asarray<bool>(x, NPY_ARRAY_FORCECAST);
           }
+          return pdist(out, x, w, FuzzyBoolDistance<RogerstanimotoFormula>{});
       },
       "x"_a, "w"_a=py::none(), "out"_a=py::none(), "_fuzzy"_a=false);
 
