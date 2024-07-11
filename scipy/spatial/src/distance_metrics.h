@@ -410,16 +410,14 @@ struct HammingDistance {
     }
 };
 
-#define ENABLE_FUZZY_NOR 0
-
 // Generic implementation of metric defined on bool vectors.
 template <typename Formula>
 struct BoolDistance {
 
     template <typename T>
     struct Acc {
-        T s_and = 0;
-        T s_xor = 0;
+        Acc() : s_and(0), s_xor(0) {}
+        T s_and, s_xor;
     };
 
     template <typename OutputType, typename InputType>
@@ -429,10 +427,15 @@ struct BoolDistance {
 //                                                       intptr_t, OutputType>::type;
         using working_type = OutputType;
         const output_type s_total = static_cast<output_type>(x.shape[1]);
-        transform_reduce_2d_<2>(out, x, y, [](InputType x, InputType y) INLINE_LAMBDA {
-            Acc<working_type> acc;
-            acc.s_and = (x != 0) & (y != 0);
-            acc.s_xor = (x != 0) ^ (y != 0);
+
+        transform_reduce_2d_(out, x, y, [](InputType x, InputType y) INLINE_LAMBDA {
+            Acc<working_type> acc; // TODO: specialize for bool
+//            x = (x != 0);
+//            y = (y != 0);
+            acc.s_and = x * y;
+            acc.s_xor = x * (1 - y) + y * (1 - x); // (x != 0) ^ (y != 0);
+//            acc.s_and = (x != 0) && (y != 0);
+//            acc.s_xor = (x != 0) != (y != 0);
             return acc;
         },
         [s_total](const Acc<working_type>& acc) INLINE_LAMBDA {
@@ -463,8 +466,10 @@ struct BoolDistance {
 
         transform_reduce_2d_(out, x, y, w, [](InputType x, InputType y, WeightType w) INLINE_LAMBDA {
             Acc<working_type> acc;
-            acc.s_and = w * ((x != 0) & (y != 0));
-            acc.s_xor = w * ((x != 0) ^ (y != 0));
+//            acc.s_and = w * ((x != 0) & (y != 0));
+//            acc.s_xor = w * ((x != 0) ^ (y != 0));
+            acc.s_and = w * (x * y);
+            acc.s_xor = w * (x*(1-y)+y*(1-x)); // fuzzy is much faster than !=
             return acc;
         },
         [s_total](const Acc<working_type>& acc) INLINE_LAMBDA {
@@ -500,7 +505,7 @@ struct FuzzyBoolDistance {
         using working_type = OutputType;
         const output_type s_total = static_cast<output_type>(x.shape[1]);
 
-        transform_reduce_2d_<2>(out, x, y, [](InputType x, InputType y) INLINE_LAMBDA {
+        transform_reduce_2d_(out, x, y, [](InputType x, InputType y) INLINE_LAMBDA {
             Acc<working_type> acc;
             if constexpr(std::is_same<InputType, bool>::value) {
                 acc.s_and = x & y;

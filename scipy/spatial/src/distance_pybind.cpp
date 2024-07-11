@@ -11,6 +11,8 @@
 #include <sstream>
 #include <string>
 
+#define SPECIALIZE_BOOL 0
+
 namespace py = pybind11;
 
 namespace {
@@ -490,6 +492,7 @@ py::array pdist(const py::object& out_obj, const py::object& x_obj,
     const intptr_t n = x.shape(0);
     std::array<intptr_t, 1> out_shape{{(n * (n - 1)) / 2}};
     if (w_obj.is_none()) {
+#if SPECIALIZE_BOOL
         if constexpr(metric_traits<Func>::domain == MetricDomain::Bool) {
             if (x.dtype().equal(py::dtype::of<bool>())) {
                 auto out = prepare_out_argument(out_obj, py::dtype::of<double>(), out_shape);
@@ -497,6 +500,7 @@ py::array pdist(const py::object& out_obj, const py::object& x_obj,
                 return out;
             }
         }
+#endif
         auto dtype = promote_type_real(x.dtype());
         auto out = prepare_out_argument(out_obj, dtype, out_shape);
         DISPATCH_DTYPE(dtype, ([&]{
@@ -506,6 +510,7 @@ py::array pdist(const py::object& out_obj, const py::object& x_obj,
     }
 
     auto w = prepare_single_weight(w_obj, m);
+#if SPECIALIZE_BOOL
     if constexpr(metric_traits<Func>::domain == MetricDomain::Bool) {
         if (x.dtype().equal(py::dtype::of<bool>())) {
             auto dtype = promote_type_real(w.dtype());
@@ -516,6 +521,7 @@ py::array pdist(const py::object& out_obj, const py::object& x_obj,
             return out;
         }
     }
+#endif
     auto dtype = promote_type_real(common_type(x.dtype(), w.dtype()));
     auto out = prepare_out_argument(out_obj, dtype, out_shape);
     DISPATCH_DTYPE(dtype, ([&]{
@@ -544,6 +550,7 @@ py::array cdist(const py::object& out_obj, const py::object& x_obj,
 
     std::array<intptr_t, 2> out_shape{{x.shape(0), y.shape(0)}};
     if (w_obj.is_none()) {
+#if SPECIALIZE_BOOL
         if constexpr(metric_traits<Func>::domain == MetricDomain::Bool) {
             if (x.dtype().equal(py::dtype::of<bool>()) &&
                 y.dtype().equal(py::dtype::of<bool>())) {
@@ -552,6 +559,7 @@ py::array cdist(const py::object& out_obj, const py::object& x_obj,
                 return out;
             }
         }
+#endif
         auto dtype = promote_type_real(common_type(x.dtype(), y.dtype()));
         auto out = prepare_out_argument(out_obj, dtype, out_shape);
         DISPATCH_DTYPE(dtype, ([&]{
@@ -560,6 +568,7 @@ py::array cdist(const py::object& out_obj, const py::object& x_obj,
         return out;
     }
 
+#if SPECIALIZE_BOOL
     if constexpr(metric_traits<Func>::domain == MetricDomain::Bool) {
         if (x.dtype().equal(py::dtype::of<bool>()) &&
             y.dtype().equal(py::dtype::of<bool>())) {
@@ -572,6 +581,7 @@ py::array cdist(const py::object& out_obj, const py::object& x_obj,
             return out;
         }
     }
+#endif
     auto w = prepare_single_weight(w_obj, m);
     auto dtype = promote_type_real(
         common_type(x.dtype(), y.dtype(), w.dtype()));
@@ -591,12 +601,12 @@ PYBIND11_MODULE(_distance_pybind, m) {
     // Boolean metrics.
     m.def("cdist_dice2",
       [](py::object x, py::object y, py::object w, py::object out) {
-          return cdist(out, x, y, w, BoolDistance<DiceFormula>{});
+          return cdist(out, x, y, w, FuzzyBoolDistance<DiceFormula>{});
       },
       "x"_a, "y"_a, "w"_a=py::none(), "out"_a=py::none());
     m.def("pdist_dice2",
       [](py::object x, py::object w, py::object out) {
-          return pdist(out, x, w, BoolDistance<DiceFormula>{});
+          return pdist(out, x, w, FuzzyBoolDistance<DiceFormula>{});
       },
       "x"_a, "w"_a=py::none(), "out"_a=py::none());
     m.def("cdist_rogerstanimoto2",
@@ -606,10 +616,18 @@ PYBIND11_MODULE(_distance_pybind, m) {
           } else {
               return cdist(out, x, y, w, BoolDistance<RogerstanimotoFormula>{});
           }
+//          if (!_fuzzy) {
+//              x = npy_asarray<bool>(x);
+//              y = npy_asarray<bool>(y);
+//          }
+//          return cdist(out, x, y, w, FuzzyBoolDistance<RogerstanimotoFormula>{});
       },
       "x"_a, "y"_a, "w"_a=py::none(), "out"_a=py::none(), "_fuzzy"_a=false);
     m.def("pdist_rogerstanimoto2",
       [](py::object x, py::object w, py::object out, bool _fuzzy) {
+//          if (!_fuzzy) {
+//              x = npy_asarray<bool>(x);
+//          }
           if (_fuzzy) {
               return pdist(out, x, w, FuzzyBoolDistance<RogerstanimotoFormula>{});
           } else {
@@ -620,20 +638,19 @@ PYBIND11_MODULE(_distance_pybind, m) {
 
     m.def("cdist_kulczynski12",
       [](py::object x, py::object y, py::object w, py::object out, bool _fuzzy) {
-          if (_fuzzy) {
-              return cdist(out, x, y, w, FuzzyBoolDistance<Kulczynski1Formula>{});
-          } else {
-              return cdist(out, x, y, w, BoolDistance<Kulczynski1Formula>{});
+          if (!_fuzzy) {
+              x = npy_asarray<bool>(x);
+              y = npy_asarray<bool>(y);
           }
+          return cdist(out, x, y, w, FuzzyBoolDistance<Kulczynski1Formula>{});
       },
       "x"_a, "y"_a, "w"_a=py::none(), "out"_a=py::none(), "_fuzzy"_a=false);
     m.def("pdist_kulczynski12",
       [](py::object x, py::object w, py::object out, bool _fuzzy) {
-          if (_fuzzy) {
-              return pdist(out, x, w, FuzzyBoolDistance<Kulczynski1Formula>{});
-          } else {
-              return pdist(out, x, w, BoolDistance<Kulczynski1Formula>{});
+          if (!_fuzzy) {
+              x = npy_asarray<bool>(x);
           }
+          return pdist(out, x, w, FuzzyBoolDistance<Kulczynski1Formula>{});
       },
       "x"_a, "w"_a=py::none(), "out"_a=py::none(), "_fuzzy"_a=false);
 
